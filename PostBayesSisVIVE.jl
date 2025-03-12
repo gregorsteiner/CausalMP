@@ -14,7 +14,7 @@ loss(y, X, Z, α, β) = (y - X*β - Z*α)' * Z * inv(Z'Z) * Z' * (y - X*β - Z*�
         α[j] ~ Laplace(0, 1 / λ)
     end
 
-    Turing.@addlogprob! - ω * loss(y, X, Z, α, β)
+    Turing.@addlogprob! -ω * loss(y, X, Z, α, β)
 end
 
 # This function implements the learning rate tuning procedure of Syring & Martin (2019, Biometrika)
