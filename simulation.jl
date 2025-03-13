@@ -3,11 +3,7 @@
 using Turing, DataFrames
 using CairoMakie
 
-using Pkg; Pkg.activate("../gIVBMA")
-using gIVBMA
-
 include("competing_methods.jl")
-include("PostBayesSisVIVE.jl")
 include("PostBayesTSLS.jl")
 
 
@@ -28,4 +24,8 @@ end
 y, x, Z = gen_data(500, 1, 5, 0, 1/2)
 X = [ones(length(x)) x]
 
-res = PostBayesTSLS(y, X, Z)
+
+tl = tune_learning_rate(y, X, Z)
+
+
+res = PostBayesTSLS(y, X, Z; ω = tl[1])
