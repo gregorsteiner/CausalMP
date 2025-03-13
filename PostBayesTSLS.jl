@@ -9,7 +9,7 @@ function PostBayesTSLS(y, X, Z; ω = 1, Σ = Matrix(1.0 * I, size(X, 2), size(X,
 end
 
 # This function implements the learning rate tuning procedure of Syring & Martin (2019, Biometrika)
-function tune_learning_rate(y, X, Z; α = 0.05, B = 200, ϵ = 0.02, maxiters = 10)
+function tune_learning_rate(y, X, Z; α = 0.05, B = 200, ϵ = 0.02, maxiters = 100)
     n = length(y)
     ω, t = ([1.0], 1)
     while true
