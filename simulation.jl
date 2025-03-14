@@ -10,32 +10,38 @@ using Pkg; Pkg.activate("../gIVBMA")
 using gIVBMA
 
 
-function gen_data(n, τ, p, s, c)
-    Z = rand(MvNormal(zeros(p), I), n)'
+f_x(xx) = sin(xx)
+f_y(yy) = cos(4*yy) + 1/3 * yy - 1/8 * yy^2 #1/10 + 1/4 * yy - 1/2 * yy^2 + - 1/5 * yy^3 + 1/3 * yy^4 - 1/25 * yy^5
 
-    α = γ = 1
-    δ = ones(p) .* 5/32 # chosen s.t. the first-stage R^2 is approximately 0.2
-    β = [ones(s); zeros(p-s)]
+function gen_data(n, f_x, f_y; τ = 1, c = 1/2)
+    z = rand(Uniform(0, 2*π), n)
+    Σ = [1 c; c 1/2] ./ 5
+    u = rand(MvTDist(4, [0, 0], Σ), n)'
+    x = f_x.(z) + u[:,2]
+    y = f_y.(x) + u[:,1]
 
-    u = rand(MixtureModel(MvNormal[MvNormal([-2, -2], [1 c; c 1]), MvNormal([2, 2], [1 c; c 1])]), n)'
-    x = γ .+ Z * δ + u[:,2]
-    y = α .+ τ * x .+ Z * β + u[:,1]
-
-    return (y=y, x=x, Z=Z)
+    return (y=y, x=x, z=z)
 end
 
-n = 500
-y, x, Z = gen_data(n, 1, 5, 0, 1/2)
+n = 10000
+y, x, z = gen_data(n, f_x, f_y)
 
-tl = tune_learning_rate(y, [ones(n) x], Z)
+f_basis(x) = [x^i for i in 0:5]
+X = reduce(hcat, f_basis.(x))'
+Z = reduce(hcat, f_basis.(z))'
 
-res = PostBayesTSLS(y, [ones(n) x], Z; ω = tl[1])
-res_givbma = givbma(y, x, Z)
+Σ_0 = inv(X' * Z * inv(Z'Z) * Z' * X)
+res = PostBayesTSLS(y, X, Z; ω = 1/2, Σ = Σ_0)
 
+f_estimated(x, β) = f_basis(x)' * β
+
+
+xx = minimum(x):0.001:maximum(x)
 fig = Figure()
 ax = Axis(fig[1, 1])
-lines!(ax, rbw(res_givbma)[1], color = :green)
-lines!(ax, Normal(res.μ[2], res.Σ[2, 2]), color = :red)
+scatter!(ax, x, y)
+lines!(ax, xx, f_y.(xx), color = :red)
+lines!(ax, xx, f_estimated.(xx, Ref(mean(res))), color = :green)
 fig
 
 
