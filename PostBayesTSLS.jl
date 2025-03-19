@@ -1,11 +1,20 @@
+using LinearAlgebra, Distributions
 
 # Return the posterior distribution under a Gaussian prior on β
-function PostBayesTSLS(y, X, Z; ω = 1, Σ = Matrix(1.0 * I, size(X, 2), size(X, 2)))
-    P_Z = Z * inv(Z'Z) * Z'
+function PostBayesTSLS_posterior(y, X, Z; ω = 1, g = max(size(X, 1), size(X, 2)^2), λ = 0)
+    P_Z = Z * inv(Z'Z + λ * I) * Z'
 
-    Mean = inv(X' * P_Z * X + 1/ω * inv(Σ)) * X' * P_Z * y
-    Cov = Symmetric(inv(ω * X' * P_Z * X + inv(Σ)))
-    return MvNormal(Mean, Cov)
+    L = cholesky(Symmetric(X' * P_Z * X))
+    Mean = ω*g / (ω*g + 1) * (L \ (X' * P_Z * y))
+    Cov = g / (ω*g + 1) * (L \ I)
+    return MvNormal(Mean, Symmetric(Cov))
+end
+
+function PostBayesTSLS_marginal_likelihood(y, X, Z; ω = 1, g = max(size(X, 1), size(X, 2)^2), λ = 0)
+    k = size(X, 2)
+    P_Z = Z * inv(Z'Z + λ * I) * Z'
+    ml = -k/2 * log(g*ω + 1) - ω/2 * y'P_Z * ( I  - (ω*g + 1)/(ω*g) * X * inv(X' * P_Z * X) * X') * P_Z * y
+    return ml
 end
 
 # This function implements the learning rate tuning procedure of Syring & Martin (2019, Biometrika)
