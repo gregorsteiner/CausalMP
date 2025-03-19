@@ -17,6 +17,16 @@ function PostBayesTSLS_marginal_likelihood(y, X, Z; ω = 1, g = max(size(X, 1), 
     return ml
 end
 
+function PostBayesTSLS_posterior_predictive(y, X, Z, X_h, Z_h; ω = 1, g = max(size(X, 1), size(X, 2)^2), λ = 0)
+    P_Z = Z * inv(Z'Z + λ * I) * Z'
+    P_Z_h = Z_h * inv(Z_h'Z_h + λ * I) * Z_h'
+
+    M_inv = inv(ω * X_h' * P_Z_h * X_h + (ω*g+1) /(ω*g) * X' * P_Z * X)
+    Cov = Symmetric(inv(P_Z_h * (I - X_h * M_inv * X_h') * P_Z_h))
+    Mean = Cov * P_Z_h * X_h * M_inv * X' * P_Z * y
+    return MvNormal(Mean, 1/ω * Cov)
+end
+
 # This function implements the learning rate tuning procedure of Syring & Martin (2019, Biometrika)
 function tune_learning_rate(y, X, Z; α = 0.05, B = 200, ϵ = 0.02, maxiters = 100)
     n = length(y)

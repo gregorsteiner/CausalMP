@@ -28,5 +28,11 @@ PostBayesTSLS_marginal_likelihood(y, X, Z)
 f(l) = PostBayesTSLS_marginal_likelihood(y, X, Z; λ = l)
 plot(f, xlim = (0, 10000))
 
+y_h, x_h, Z_h = gen_data(Int(n/10), f_y)
+X_h = [ones(length(x_h)) x_h x_h.^2]
 
-fit = PostBayesTSLS_posterior(y, X, Z; ω = 1/10, λ = 10)
+post_pred = PostBayesTSLS_posterior_predictive(y, X, Z, X_h, Z_h)
+post_pred_shrunk = PostBayesTSLS_posterior_predictive(y, X, Z, X_h, Z_h; ω = 2)
+
+map(d -> -logpdf(d, y_h), [post_pred, post_pred_shrunk])
+
