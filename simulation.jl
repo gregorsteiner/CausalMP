@@ -1,14 +1,14 @@
 
 
 using Turing, DataFrames
-using Plots
+using StatsPlots
 
 include("competing_methods.jl")
 include("PostBayesTSLS.jl")
 
-f_y(yy) = 1 + 1/3 * yy - 1/8 * yy^2
+f_y(yy) = 1 + 1/3 * yy #- 1/8 * yy^2
 
-function gen_data(n, f_y; τ = 1, c = 1/2)
+function gen_data(n, f_y; c = 1/2)
     Z = rand(MvNormal(zeros(10), I), n)'
 
     Σ = [1 c; c 1/2] ./ 5
@@ -19,20 +19,28 @@ function gen_data(n, f_y; τ = 1, c = 1/2)
     return (y=y, x=x, z=Z)
 end
 
-n = 100
-y, x, Z = gen_data(n, f_y)
-X = [ones(length(x)) x x.^2]
+# auxiliary function to extract the marginal posteriors for each component
+marginals(posterior) = map((μ, σ) -> Normal(μ, σ), posterior.μ, sqrt.(diag(posterior.Σ)))
 
-PostBayesTSLS_marginal_likelihood(y, X, Z)
 
-f(l) = PostBayesTSLS_marginal_likelihood(y, X, Z; λ = l)
-plot(f, xlim = (0, 10000))
+n, m = (50, 500)
+covg = Matrix{Bool}(undef, 2, m)
+for i in 1:m
+    y, x, Z = gen_data(n, f_y)
+    X = [ones(length(x)) x]
 
-y_h, x_h, Z_h = gen_data(Int(n/10), f_y)
-X_h = [ones(length(x_h)) x_h x_h.^2]
+    fit_1 = PostBayesTSLS_posterior(y, X, Z)
 
-post_pred = PostBayesTSLS_posterior_predictive(y, X, Z, X_h, Z_h)
-post_pred_shrunk = PostBayesTSLS_posterior_predictive(y, X, Z, X_h, Z_h; ω = 2)
+    ω_sm = tune_learning_rate(y, X, Z)[1]
+    fit_sm = PostBayesTSLS_posterior(y, X, Z; ω = ω_sm)
 
-map(d -> -logpdf(d, y_h), [post_pred, post_pred_shrunk])
+    ci_1 = quantile(marginals(fit_1)[2], [0.025, 0.975])
+    covg[1, i] = ci_1[1] < 1/3 < ci_1[2]
+
+    ci_sm = quantile(marginals(fit_sm)[2], [0.025, 0.975])
+    covg[2, i] = ci_sm[1] < 1/3 < ci_sm[2]
+end
+
+
+mean(covg, dims = 2)
 

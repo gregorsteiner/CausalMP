@@ -32,12 +32,12 @@ function tune_learning_rate(y, X, Z; α = 0.05, B = 200, ϵ = 0.02, maxiters = 1
     n = length(y)
     ω, t = ([1.0], 1)
     while true
-        posterior_full = PostBayesTSLS(y, X, Z; ω = ω[t])
+        posterior_full = PostBayesTSLS_posterior(y, X, Z; ω = ω[t])
         est_tau = mean(posterior_full)[2]
         bool_covg = Vector{Bool}(undef, B)
         for i in eachindex(bool_covg)
             idx_boot = sample(1:n, n; replace = true)
-            posterior_boot = PostBayesTSLS(y[idx_boot], X[idx_boot, :], Z[idx_boot, :]; ω = ω[t])
+            posterior_boot = PostBayesTSLS_posterior(y[idx_boot], X[idx_boot, :], Z[idx_boot, :]; ω = ω[t])
             ci = quantile(Normal(mean(posterior_boot)[2], sqrt(cov(posterior_boot)[2, 2])), [α/2, 1 - α/2])
             bool_covg[i] = ci[1] < est_tau < ci[2] 
         end
