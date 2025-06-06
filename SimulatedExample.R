@@ -26,16 +26,18 @@ gen_data = function(n = 50, rho = 1/2){
   )
 }
 
-
 # Run analysis
-set.seed(41)
+set.seed(13)
 d = gen_data(n = 500)
 
+# tsls(d[, 1], d[, 2], d[, 3])
+# ols(d[, 1], d[,2])$coef
 
 N = 2500
 B = 500
-res = martingale_posterior(d, B = B, N = N)
-beta = do.call(cbind, lapply(res, "[[", 1))
+res_naive = martingale_posterior(d[, 1], d[, 2], B = B, N = N, type = "LM")
+res_gmm = martingale_posterior_gmm(d[, 1], d[, 2], d[, 3], B = B, N = N, type = "LM")
+
 
 
 # compare with regular Bayesian IV
@@ -47,8 +49,9 @@ beta_rossi = as.numeric(res_rossi$betadraw)
 
 library(ggplot2)
 # Combine the data for plotting
-df_plot <- dplyr::bind_rows(
-  data.frame(beta = beta[2, ], method = "Martingale Posterior"),
+df_plot <- rbind(
+  data.frame(beta = do.call(cbind, lapply(res_naive, "[[", 1))[2, ], method = "Naive Martingale Posterior"),
+  data.frame(beta = do.call(cbind, lapply(res_gmm, "[[", 1))[2, ], method = "GMM Martingale Posterior"),
   data.frame(beta = beta_rossi, method = "Bayesian IV (Rossi)")
 )
 
@@ -69,7 +72,9 @@ p = ggplot(df_plot, aes(x = beta, fill = method, color = method)) +
   theme(
     text = element_text(size = 14),
     plot.title = element_text(hjust = 0.5)
-)
+  ) +
+  coord_cartesian(xlim = c(-2, 3))
+p
 
 ggsave("mp_example_posterior.pdf", plot = p, width = 8, height = 4)
 
