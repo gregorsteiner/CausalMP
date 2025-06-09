@@ -1,6 +1,7 @@
 
-# include the methods
-source("MartingalePosteriorGMM.R")
+# preliminaries
+source("MartingalePosteriorGMM.R") # include the methods
+library(parallel) # parallel package for parallelisation
 
 # functions to generate the data
 expit = function(x){1 / (1 + exp(-x))}
@@ -28,16 +29,23 @@ gen_data = function(n = 50, rho = 1/2){
 
 # Run analysis
 set.seed(13)
-d = gen_data(n = 500)
+d = gen_data(n = 50)
 
 # tsls(d[, 1], d[, 2], d[, 3])
 # ols(d[, 1], d[,2])$coef
 
-N = 2500
-B = 500
-res_naive = martingale_posterior(d[, 1], d[, 2], B = B, N = N, type = "LM")
-res_gmm = martingale_posterior_gmm(d[, 1], d[, 2], d[, 3], B = B, N = N, type = "LM")
+N = 2000
+B = 200
 
+res_naive = martingale_posterior(d[, 1], d[, 2], B = B, N = N, type = "LM", cl = cl)
+res_gmm = martingale_posterior_gmm(d[, 1], d[, 2], d[, 3], B = B, N = N, type = "LM", cl = cl)
+
+
+microbenchmark::microbenchmark(
+  Naive = martingale_posterior(d[, 1], d[, 2], B = B, N = N, type = "LM"),
+  GMM = martingale_posterior_gmm(d[, 1], d[, 2], d[, 3], B = B, N = N, type = "LM"),
+  times = 5L
+)
 
 
 # compare with regular Bayesian IV

@@ -48,9 +48,12 @@ one_step_update = function(data, type = "BB"){
 }
 
 
-# function implementing the netire martingale posterior procedure
-martingale_posterior_gmm = function(y, x, z, B = 100, N = 1000, type = "BB"){
-  posterior = lapply(1:B, function(j){
+# function implementing the entire martingale posterior procedure
+martingale_posterior_gmm = function(y, x, z, B = 100, N = 1000, type = "BB", cl = NULL){
+  cl <- makeCluster(detectCores() - 2)
+  clusterExport(cl, varlist = c("one_step_update", "ols", "tsls"))
+  
+  posterior = parLapply(cl, 1:B, function(j, y, x, z, N, type){
     d = list(y = y, x = x, z = z)
     # generate final dataset
     d = Reduce(function(d_int, i) one_step_update(d_int, type = type), 1:N, init = d, accumulate = FALSE)
@@ -60,7 +63,9 @@ martingale_posterior_gmm = function(y, x, z, B = 100, N = 1000, type = "BB"){
       "beta" = tsls(d$y, d$x, d$z),
       "data" = d
       ))
-  })
+  }, y, x, z, N, type)
+  
+  stopCluster(cl)
   
   return(posterior)
 }
@@ -93,8 +98,11 @@ one_step_update_naive = function(data, type = "BB"){
 
 
 
-martingale_posterior = function(y, x, B = 100, N = 1000, type = "BB"){
-  posterior = lapply(1:B, function(j){
+martingale_posterior = function(y, x, B = 100, N = 1000, type = "BB", cl = cl){
+  cl <- makeCluster(detectCores() - 2)
+  clusterExport(cl, varlist = c("one_step_update_naive", "ols", "tsls"))
+  
+  posterior = parLapply(cl, 1:B, function(j, y, x, N, type){
     d = list(y = y, x = x)
     # generate final dataset
     d = Reduce(function(d_int, i) one_step_update_naive(d_int, type = type), 1:N, init = d, accumulate = FALSE)
@@ -104,7 +112,9 @@ martingale_posterior = function(y, x, B = 100, N = 1000, type = "BB"){
       "beta" = ols(d$y, d$x)$coef,
       "data" = d
     ))
-  })
+  }, y, x, N, type)
+  
+  stopCluster(cl)
   
   return(posterior)
   
