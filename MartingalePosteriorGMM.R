@@ -49,7 +49,7 @@ one_step_update = function(data, type = "BB"){
 
 
 # function implementing the entire martingale posterior procedure
-martingale_posterior_gmm = function(y, x, z, B = 100, N = 1000, type = "BB", cl = NULL){
+martingale_posterior_gmm = function(y, x, z, B = 100, N = 1000, type = "BB"){
   cl <- makeCluster(detectCores() - 2)
   clusterExport(cl, varlist = c("one_step_update", "ols", "tsls"))
   
@@ -97,8 +97,7 @@ one_step_update_naive = function(data, type = "BB"){
 }
 
 
-
-martingale_posterior = function(y, x, B = 100, N = 1000, type = "BB", cl = cl){
+martingale_posterior = function(y, x, B = 100, N = 1000, type = "BB"){
   cl <- makeCluster(detectCores() - 2)
   clusterExport(cl, varlist = c("one_step_update_naive", "ols", "tsls"))
   

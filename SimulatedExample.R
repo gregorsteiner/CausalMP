@@ -37,8 +37,8 @@ d = gen_data(n = 50)
 N = 2000
 B = 200
 
-res_naive = martingale_posterior(d[, 1], d[, 2], B = B, N = N, type = "LM", cl = cl)
-res_gmm = martingale_posterior_gmm(d[, 1], d[, 2], d[, 3], B = B, N = N, type = "LM", cl = cl)
+res_naive = martingale_posterior(d[, 1], d[, 2], B = B, N = N, type = "LM")
+res_gmm = martingale_posterior_gmm(d[, 1], d[, 2], d[, 3], B = B, N = N, type = "LM")
 
 
 microbenchmark::microbenchmark(
