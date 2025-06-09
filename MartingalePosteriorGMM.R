@@ -1,8 +1,14 @@
 
+
+# Utility to add intercept
+add_intercept = function(X) {
+  cbind(1, X)
+}
+
 # functions to fit OLS and TSLS
 ols = function(y, x){
   n = length(y)
-  X = cbind(rep(1, n), x)
+  X = add_intercept(x)
   beta_hat = solve(t(X) %*% X) %*% t(X) %*% y
   sigma = sqrt(t(y - X %*% beta_hat) %*% (y - X %*% beta_hat) / (n-ncol(X)))
   return(list(
@@ -12,102 +18,86 @@ ols = function(y, x){
 }
 
 tsls = function(y, x, z){
-  n = length(y)
-  Z = cbind(rep(1, n), z)
+  Z = add_intercept(z)
   P_Z = Z %*% solve(t(Z) %*% Z) %*% t(Z)
-  X = cbind(rep(1, n), x)
+  X = add_intercept(x)
   beta_hat = solve(t(X) %*% P_Z %*% X) %*% t(X) %*% P_Z %*% y
   return(beta_hat)
 }
 
 # function to perform the one-step predictive update
-one_step_update = function(data, type = "BB"){
+one_step_update = function(data, type = "BB", endogeneity = TRUE) {
   n = length(data$y)
   
-  if(type == "BB"){
-    new = cbind(data$y, data$x, data$z)[sample(n, size = 1), ]
-    return(list(
-      y = c(data$y, new[1]),
-      x = c(data$x, new[2]),
-      z = c(data$z, new[3])
-    ))
-    
-  } else if(type == "LM") {
-    x_z_new = cbind(data$x, data$z)[sample(n, size = 1), ]
-    X = cbind(rep(1, n), data$x, data$z)
-    
-    ols_res = ols(data$y, cbind(data$x, data$z))
-    y_new = rnorm(1, c(1, x_z_new) %*% ols_res$coef, ols_res$sigma)
-    return(list(
-      y = c(data$y, y_new),
-      x = c(data$x, x_z_new[1]),
-      z = c(data$z, x_z_new[2])
-    ))
-  }
-  
-}
-
-
-# function implementing the netire martingale posterior procedure
-martingale_posterior_gmm = function(y, x, z, B = 100, N = 1000, type = "BB"){
-  posterior = lapply(1:B, function(j){
-    d = list(y = y, x = x, z = z)
-    # generate final dataset
-    d = Reduce(function(d_int, i) one_step_update(d_int, type = type), 1:N, init = d, accumulate = FALSE)
-    
-    # compute estimate of the parameter of interest
-    return(list(
-      "beta" = tsls(d$y, d$x, d$z),
-      "data" = d
+  if (type == "BB") {
+    idx = sample(n, 1) # sample BB index
+    if (endogeneity) {
+      return(list(
+        y = c(data$y, data$y[idx]),
+        x = c(data$x, data$x[idx]),
+        z = c(data$z, data$z[idx])
       ))
-  })
-  
-  return(posterior)
-}
-
-
-# functions implementing a naive martingale posterior (ignoring endogeneity)
-one_step_update_naive = function(data, type = "BB"){
-  n = length(data$y)
-  if(type == "BB"){
-    new = cbind(data$y, data$x)[sample(n, size = 1), ]
-    return(list(
-      y = c(data$y, new[1]),
-      x = c(data$x, new[2]),
-      z = c(data$z, new[3])
-    ))
-    
-  } else if(type == "LM"){
-    # Draw x and z from a Bayesian bootstrap
-    # Then update y | x, z using a linear model
-    x_new = data$x[sample(n, size = 1)]
-    
-    ols_res = ols(data$y, data$x)
-    y_new = rnorm(1, c(1, x_new) %*% ols_res$coef, ols_res$sigma)
-    return(list(
-      y = c(data$y, y_new),
-      x = c(data$x, x_new[1])
-    ))
+    } else {
+      return(list(
+        y = c(data$y, data$y[idx]),
+        x = c(data$x, data$x[idx]),
+        z = NULL
+      ))
+    }
+  } else if (type == "LM") {
+    idx = sample(n, 1) # sample BB index
+    if (endogeneity) {
+      XZ = cbind(data$x, data$z)
+      xz_new = XZ[idx, ]
+      fit = ols(data$y, XZ)
+      y_new = rnorm(1, c(1, xz_new) %*% fit$coef, fit$sigma)
+      return(list(
+        y = c(data$y, y_new),
+        x = c(data$x, xz_new[1]),
+        z = c(data$z, xz_new[2])
+      ))
+    } else {
+      x_new = data$x[idx]
+      fit = ols(data$y, data$x)
+      y_new = rnorm(1, c(1, x_new) %*% fit$coef, fit$sigma)
+      return(list(
+        y = c(data$y, y_new),
+        x = c(data$x, x_new),
+        z = NULL
+      ))
+    }
   }
 }
 
 
-
-martingale_posterior = function(y, x, B = 100, N = 1000, type = "BB"){
-  posterior = lapply(1:B, function(j){
-    d = list(y = y, x = x)
-    # generate final dataset
-    d = Reduce(function(d_int, i) one_step_update_naive(d_int, type = type), 1:N, init = d, accumulate = FALSE)
+# General Martingale Posterior Sampler
+martingale_posterior = function(y, x, z = NULL, B = 100, N = 1000, type = "BB") {
+  # if z is provided use GMM, otherwise use basic least squares
+  if(is.null(z)) endogeneity = FALSE else endogeneity = TRUE
+  
+  # initialise cluster for parallelisation
+  cl = parallel::makeCluster(parallel::detectCores() - 2)
+  parallel::clusterExport(cl, varlist = c("one_step_update", "ols", "tsls", "add_intercept"))
+  
+  # get a posterior estimate for each predictive sequence (loop over 1:b -> B posterior samples)
+  posterior = parallel::parLapply(cl, 1:B, function(j, y, x, z, N, type, endogeneity) {
+    data = list(y = y, x = x, z = z)
+    for (i in 1:N) {
+      data = one_step_update(data, type = type, endogeneity = endogeneity)
+    }
     
-    # compute estimate of the parameter of interest
-    return(list(
-      "beta" = ols(d$y, d$x)$coef,
-      "data" = d
-    ))
-  })
+    if (endogeneity) {
+      beta_est = tsls(data$y, data$x, data$z)
+    } else {
+      beta_est = ols(data$y, data$x)$coef
+    }
+    
+    return(list(beta = beta_est))
+  }, y, x, z, N, type, endogeneity)
   
+  # stop cluster and return posterior
+  parallel::stopCluster(cl)
   return(posterior)
-  
 }
 
   
