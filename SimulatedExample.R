@@ -34,7 +34,7 @@ d = gen_data(n = 500)
 # tsls(d[, 1], d[, 2], d[, 3])
 # ols(d[, 1], d[,2])$coef
 
-N = 5000
+N = 5000 # N > n
 B = 500
 
 res_naive = martingale_posterior(d[, 1], d[, 2], B = B, N = N, type = "LM")
