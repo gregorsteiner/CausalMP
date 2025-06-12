@@ -44,7 +44,7 @@ res_gmm = martingale_posterior(d[, 1], d[, 2], z = d[, 3], B = B, N = N, type = 
 # compare with regular Bayesian IV
 res_rossi = bayesm::rivGibbs(
   list(y = d[, 1], x = d[, 2], w = matrix(rep(1, nrow(d)), ncol = 1), z = cbind(rep(1, nrow(d)), d[ , 3])),
-  Mcmc = list(R = B, nprint = 0),
+  Mcmc = list(R = 5*B, nprint = 0),
 )
 beta_rossi = as.numeric(res_rossi$betadraw)
 

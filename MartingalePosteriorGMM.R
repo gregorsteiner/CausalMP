@@ -51,7 +51,7 @@ one_step_update = function(y, x, z, type = "BB", endogeneity = TRUE) {
     ## Use BB foe x and z and then predict y using a linear model
     idx = sample(n, 1) # sample BB index
     if (endogeneity) {
-      XZ = cbind(x, z)
+      XZ = cbind(x, z, x * z)
       x_new = XZ[idx, 1]; z_new = XZ[idx, 2]
       y_new = bayes_lin_reg(y, XZ, XZ[idx,])
     } else {
