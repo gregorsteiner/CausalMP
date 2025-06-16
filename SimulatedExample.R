@@ -29,10 +29,43 @@ gen_data = function(n = 50, rho = 1/2){
 
 # Run analysis
 set.seed(13)
-d = gen_data(n = 500)
+d = gen_data(n = 100)
 
 # tsls(d[, 1], d[, 2], d[, 3])
 # ols(d[, 1], d[,2])$coef
+
+y = d[, 1]
+W = d[, 2:3]
+PYpar <- PYcalibrate(Ek = 3, n = 500, discount = 0.25)
+prior <- list(strength = PYpar$strength, discount = PYpar$discount)
+
+grid_y <- seq(-7, 7, length.out = 100)
+grid_x <- rbind(
+  c(0, 0), c(1, 0), c(0, 1), c(1, 1)
+)
+mcmc <- list(niter = 2000, nburn = 1000)
+output <- list(grid_x = grid_x, grid_y = grid_y, out_type = "FULL", out_param = TRUE)
+
+res = PYregression(y = y, x = W, prior = prior, mcmc = mcmc, output = output)
+
+df_plot = data.frame(grid_y, apply(res$density, c(1, 2), mean))
+colnames(df_plot) = c("Grid", "00", "10", "01", "11")
+df_plot = tidyr::pivot_longer(
+  df_plot,
+  cols = 2:5, values_to = "y", names_to = "Group"
+)
+
+library(ggplot2)
+ggplot(df_plot) +
+  geom_line(aes(x = Grid, y = y, colour = Group), linewidth = 0.8) +
+  theme_bw()
+
+
+
+res$beta[[1]]
+
+ddp_predictive_sequence = function(i, )
+
 
 N = 5000 # N > n
 B = 500
