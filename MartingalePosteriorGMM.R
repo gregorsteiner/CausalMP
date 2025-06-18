@@ -31,6 +31,18 @@ tsls = function(y, x, z){
 
 ##### Predictive update #####
 
+# function predicting a new squence based on the Bayesian bootstrap
+bayesian_bootstrap = function(x, N){
+  n = nrow(x)
+  x_full = matrix(NA, N, ncol(x))
+  x_full[1:n, ] = x
+  for (i in (n+1):N) {
+    idx = sample(i-1, size = 1)
+    x_full[i, ] = x_full[idx, ]
+  }
+  return(x_full)
+}
+
 # function implementing bayesian linear regression
 bayes_lin_reg = function(y, X, X_new){
   fit_ols = ols(y, X)
