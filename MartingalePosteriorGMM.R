@@ -43,16 +43,63 @@ bayesian_bootstrap = function(x, N){
   return(x_full)
 }
 
-# function implementing bayesian linear regression
-bayes_lin_reg = function(y, X, X_new){
-  fit_ols = ols(y, X)
-  X_new = matrix(c(1, X_new), nrow = 1)
-  y_new = mvtnorm::rmvt(
-    1, type = "shifted", df = length(y) - ncol(X_new),
-    sigma = fit_ols$sigma2 * (1 + X_new %*% fit_ols$X_t_X_inv %*% t(X_new)),
-    delta = X_new %*% fit_ols$coef
-  )
-  return(y_new)
+# function generating a predictive sequence based on the dependent Dirichlet process (DDP)
+ddp_predictive_sequence = function(idx, N, X, fit){
+  if(!inherits(fit, "BNPdens")) stop("`fit` needs to be a BNPdens object.")
+  n = ncol(fit$clust)
+  alpha = 1 # strength parameter of the DP
+  clust = numeric(N); clust[1:n] = fit$clust[idx, ] # the cluster allocation for the i-th posterior sample
+  beta = fit$beta[[idx]]
+  sigma2 = fit$sigma2[[idx]][, 1]
+  
+  y = numeric(N); y[1:n] = fit$data[, 1]
+  k = ncol(beta) # number of columns of design matrix
+  
+  #prior hyperprarameters
+  a = 2; b = var(y[1:n]) # prior shape and scale of inverse Gamma Base measure on sigma
+  mu = c(mean(y[1:n]), rep(0, k-1)) # prior mean of Normal base measure
+  Sigma = diag(100, k, k) # prior covariance of Normal base measure
+  
+  for (i in (n+1):N) {
+    if(runif(1) < (alpha / (alpha + n))){ # with this probability sample from the base measure
+      beta_new = MASS::mvrnorm(1, mu, Sigma)
+      sigma2_new = 1 / rgamma(1, a, b)
+      beta = rbind(beta, beta_new)
+      sigma2 = c(sigma2, sigma2_new)
+      clust[i] = max(clust) + 1 # new cluster
+      y[i] = rnorm(1, c(1, X[i, ]) %*% beta_new, sqrt(sigma2_new))
+      
+    } else{ # else sample from the atoms
+      new_idx = sample(clust[1:(i-1)], size = 1)
+      clust[i] = new_idx
+      y[i] = rnorm(1, c(1, X[i, ]) %*% beta[new_idx+1, ], sqrt(sigma2[new_idx+1]))
+    }
+  }
+  
+  # return predictive sequence
+  return(y)
+  
+}
+
+
+# function generating a predictive sequence based on bayesian linear regression
+bayes_lin_reg = function(y, X, N){
+  n = length(y)
+  y_full = numeric(N)
+  y_full[1:n] = y
+  
+  for (i in (n+1):N) {
+    fit_ols = ols(y_full[1:(i-1)], X[1:(i-1), ])
+    X_new = matrix(c(1, X[i, ]), nrow = 1)
+    
+    y_full[i] = mvtnorm::rmvt(
+      1, type = "shifted", df = (i-1) - ncol(X_new),
+      sigma = fit_ols$sigma2 * (1 + X_new %*% fit_ols$X_t_X_inv %*% t(X_new)),
+      delta = X_new %*% fit_ols$coef
+    )
+  }
+  
+  return(y_full)
 }
 
 # wrapper function that performs the update

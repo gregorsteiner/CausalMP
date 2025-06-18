@@ -30,7 +30,7 @@ gen_data = function(n = 50, rho = 1/2){
 
 # Run analysis
 set.seed(13)
-d = gen_data(n = 100)
+d = gen_data(n = 500)
 
 # tsls(d[, 1], d[, 2], d[, 3])
 # ols(d[, 1], d[,2])$coef
@@ -51,56 +51,25 @@ output <- list(grid_x = grid_x, grid_y = grid_y, out_type = "FULL", out_param = 
 res = PYregression(y = y, x = W, prior = prior, mcmc = mcmc, output = output)
 
 
-ddp_predictive_sequence = function(idx, N, X, fit){
-  if(!inherits(fit, "BNPdens")) stop("`fit` needs to be a BNPdens object.")
-  n = ncol(fit$clust)
-  alpha = 1 # strength parameter of the DP
-  clust = numeric(N); clust[1:n] = fit$clust[idx, ] # the cluster allocation for the i-th posterior sample
-  beta = fit$beta[[idx]]
-  sigma2 = fit$sigma2[[idx]][, 1]
-  
-  y = numeric(N); y[1:n] = fit$data[, 1]
-  k = ncol(beta) # number of columns of design matrix
-  
-  #prior hyperprarameters
-  a = 2; b = var(y[1:n]) # prior shape and scale of inverse Gamma Base measure on sigma
-  mu = c(mean(y[1:n]), rep(0, k-1)) # prior mean of Normal base measure
-  Sigma = diag(100, k, k) # prior covariance of Normal base measure
-  
-  for (i in (n+1):N) {
-    if(runif(1) < (alpha / (alpha + n))){ # with this probability sample from the base measure
-      beta_new = MASS::mvrnorm(1, mu, Sigma)
-      sigma2_new = 1 / rgamma(1, a, b)
-      beta = rbind(beta, beta_new)
-      sigma2 = c(sigma2, sigma2_new)
-      clust[i] = max(clust) + 1 # new cluster
-      y[i] = rnorm(1, c(1, X[i, ]) %*% beta_new, sqrt(sigma2_new))
-      
-    } else{ # else sample from the atoms
-      new_idx = sample(clust[1:(i-1)], size = 1)
-      clust[i] = new_idx
-      y[i] = rnorm(1, c(1, X[i, ]) %*% beta[new_idx+1, ], sqrt(sigma2[new_idx+1]))
-    }
-  }
-  
-  # return predictive sequence
-  return(y)
-  
-}
-
-N = 1000
+N = 5000
 X_new = bayesian_bootstrap(W, N)
-y_new = ddp_predictive_sequence(1, N, X_new, res)
+
+y_new_blr = bayes_lin_reg(y, X_new, N)
+y_new_ddp = ddp_predictive_sequence(1, N, X_new, res)
 
 df_plot = data.frame(
-  y = y_new,
+  DDP = y_new_ddp,
+  BLR = y_new_blr,
   group = ifelse(X_new[, 1] == 1, "Treatment", "Control"),
-  type = c(rep("Original", n), rep("Imputed", N-n))
+  type = c(rep("Original Data", n), rep("Imputed Data", N-n))
 )
 
-ggplot(df_plot, aes(x = y, colour = type, fill = type)) +
-  geom_density(alpha = 0.8) +
-  facet_wrap(~group) +
+df_plot = tidyr::pivot_longer(df_plot, 1:2, names_to = "Method")
+
+ggplot(df_plot, aes(x = value, colour = type, fill = type)) +
+  geom_density(alpha = 0.7) +
+  facet_wrap(~ Method + group) +
+  xlim(c(-20, 20)) +
   theme_bw()
 
 
