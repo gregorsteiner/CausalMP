@@ -38,8 +38,7 @@ d = gen_data(n = 500)
 
 y = d[, 1]
 W = d[, 2:3]
-PYpar <- PYcalibrate(Ek = 3, n = 500, discount = 0.25)
-prior <- list(strength = PYpar$strength, discount = PYpar$discount)
+prior <- list(strength = 1, discount = 0)
 
 grid_y <- seq(-7, 7, length.out = 100)
 grid_x <- rbind(
@@ -76,8 +75,8 @@ ggplot(df_plot, aes(x = value, colour = type, fill = type)) +
 N = 5000 # N > n
 B = 500
 
-res_naive = martingale_posterior(d[, 1], d[, 2], B = B, N = N, type = "LM")
-res_gmm = martingale_posterior(d[, 1], d[, 2], z = d[, 3], B = B, N = N, type = "LM")
+res_naive = martingale_posterior(d[, 1], d[, 2], d[, 3], B = B, N = N, type = "DDP", endogeneity = FALSE)
+res_gmm = martingale_posterior(d[, 1], d[, 2], d[, 3], B = B, N = N, type = "DDP")
 
 
 # compare with regular Bayesian IV
@@ -90,8 +89,8 @@ beta_rossi = as.numeric(res_rossi$betadraw)
 library(ggplot2)
 # Combine the data for plotting
 df_plot <- rbind(
-  data.frame(beta = do.call(cbind, lapply(res_naive, "[[", 1))[2, ], method = "Naive Martingale Posterior"),
-  data.frame(beta = do.call(cbind, lapply(res_gmm, "[[", 1))[2, ], method = "GMM Martingale Posterior"),
+  data.frame(beta = sapply(res_naive, "[[", 2), method = "Naive Martingale Posterior"),
+  data.frame(beta = sapply(res_gmm, "[[", 2), method = "GMM Martingale Posterior"),
   data.frame(beta = beta_rossi, method = "Bayesian IV (Rossi)")
 )
 

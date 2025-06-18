@@ -102,71 +102,49 @@ bayes_lin_reg = function(y, X, N){
   return(y_full)
 }
 
-# wrapper function that performs the update
-one_step_update = function(y, x, z, type = "BB", endogeneity = TRUE) {
-  n = length(y)
-  
-  if (type == "LM") {
-    ## Use BB foe x and z and then predict y using a linear model
-    idx = sample(n, 1) # sample BB index
-    if (endogeneity) {
-      XZ = cbind(x, z, x * z)
-      x_new = XZ[idx, 1]; z_new = XZ[idx, 2]
-      y_new = bayes_lin_reg(y, XZ, XZ[idx,])
-    } else {
-      x_new = x[idx]; z_new = NA
-      y_new = bayes_lin_reg(y, x, x_new)
-    }
-    return(c(
-      y = y_new,
-      x = x_new,
-      z = z_new
-    ))
-  }
-}
 
 
 ##### Martingale posterior function #####
-martingale_posterior = function(y, x, z = NULL, B = 100, N = 1000, type = "BB") {
-  # if z is provided use GMM, otherwise use basic least squares
-  if(is.null(z)){
-    endogeneity = FALSE
-    data = cbind(y, x, rep(NA, length(y)))
-  } else{
-    endogeneity = TRUE
-    data = cbind(y, x, z)
-  }
+martingale_posterior = function(y, x, z, B = 100, N = 1000, type = "DDP", endogeneity = TRUE) {
+  n = length(y)
+  X = cbind(x, z)
+  
+  if(type == "DDP"){
+    prior = list(strength = 1, discount = 0)
+    grid_y = seq(-7, 7, length.out = 100)
+    grid_x = rbind(c(0, 0), c(1, 0), c(0, 1), c(1, 1))
+    mcmc = list(niter = 1000 + B, nburn = 1000, print_message = FALSE)
+    output = list(grid_x = grid_x, grid_y = grid_y, out_type = "FULL", out_param = TRUE)
+    ddp_fit = PYregression(y = y, x = X, prior = prior, mcmc = mcmc, output = output)
+  } else {ddp_fit = NULL}
   
   # initialise cluster for parallelisation
-  cl = parallel::makeCluster(parallel::detectCores() - 2)
-  parallel::clusterExport(cl, varlist = c("one_step_update", "bayes_lin_reg", "ols", "tsls", "add_intercept"))
+  cl = parallel::makeCluster(parallel::detectCores() - 4)
+  parallel::clusterExport(cl, varlist = c("bayesian_bootstrap", "ddp_predictive_sequence", "bayes_lin_reg", "ols", "tsls", "add_intercept"))
 
   # get a posterior samplefor each predictive sequence (loop over 1:B -> B posterior samples)
-  posterior = parallel::parLapply(cl, 1:B, function(j, data, N, type, endogeneity) {
+  posterior = parallel::parLapply(cl, 1:B, function(j, y, X, N, ddp_fit, type, endogeneity) {
   #posterior = lapply(1:B, function(j, data, N, type, endogeneity) {  
-    n = nrow(data)
-    data_full = rbind(data, matrix(NA, nrow = N-n, ncol = 3))
-    for (i in (n+1):N) {
-      data_full[i, ] = one_step_update(
-        data_full[1:(i-1), 1],
-        data_full[1:(i-1), 2],
-        data_full[1:(i-1), 3],
-        type = type,
-        endogeneity = endogeneity
-      )
+    # generate new X via Bayesian bootstrap
+    X_full = bayesian_bootstrap(X, N)
+    if(type == "DDP"){
+      y_full = ddp_predictive_sequence(j, N, X_full, ddp_fit)
+    } else if(type == "LM"){
+      y_full = bayes_lin_reg(y, X_full, N)
     }
-    
+    # compute the estimates
     if (endogeneity) {
-      beta_est = tsls(data_full[, 1], data_full[, 2], data_full[, 3])
+      beta_est = tsls(y_full, X_full[, 1], X_full[, 2])
     } else {
-      beta_est = ols(data_full[, 1], data_full[, 2])$coef
+      beta_est = ols(y_full, X_full[, 1])$coef
     }
     
-    return(list(beta = beta_est))
-  }, data, N, type, endogeneity)
+    return(beta_est)
+  }, y, X, N, ddp_fit, type, endogeneity)
   
-  # stop cluster and return posterior
+  # stop cluster
   parallel::stopCluster(cl)
+  
   return(posterior)
 }
 
