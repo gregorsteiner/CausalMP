@@ -2,6 +2,7 @@
 # preliminaries
 source("MartingalePosteriorGMM.R") # include the methods
 library(parallel) # parallel package for parallelisation
+library(BNPmix) # for dependent Dirichlet prior models
 
 # functions to generate the data
 expit = function(x){1 / (1 + exp(-x))}
@@ -31,15 +32,13 @@ gen_data = function(n = 50, rho = 1/2){
 set.seed(13)
 d = gen_data(n = 500)
 
-# tsls(d[, 1], d[, 2], d[, 3])
-# ols(d[, 1], d[,2])$coef
-
-N = 5000 # N > n
+N = 5000
 B = 500
 
-res_naive = martingale_posterior(d[, 1], d[, 2], B = B, N = N, type = "LM")
-res_gmm = martingale_posterior(d[, 1], d[, 2], z = d[, 3], B = B, N = N, type = "LM")
-
+res_naive_ddp = martingale_posterior(d[, 1], d[, 2], d[, 3], B = B, N = N, type = "DDP", endogeneity = FALSE)
+res_gmm_ddp = martingale_posterior(d[, 1], d[, 2], d[, 3], B = B, N = N, type = "DDP")
+res_naive_lm = martingale_posterior(d[, 1], d[, 2], d[, 3], B = B, N = N, type = "LM", endogeneity = FALSE)
+res_gmm_lm = martingale_posterior(d[, 1], d[, 2], d[, 3], B = B, N = N, type = "LM")
 
 # compare with regular Bayesian IV
 res_rossi = bayesm::rivGibbs(
@@ -51,8 +50,10 @@ beta_rossi = as.numeric(res_rossi$betadraw)
 library(ggplot2)
 # Combine the data for plotting
 df_plot <- rbind(
-  data.frame(beta = do.call(cbind, lapply(res_naive, "[[", 1))[2, ], method = "Naive Martingale Posterior"),
-  data.frame(beta = do.call(cbind, lapply(res_gmm, "[[", 1))[2, ], method = "GMM Martingale Posterior"),
+  data.frame(beta = sapply(res_naive_ddp, "[[", 2), method = "Naive Martingale Posterior (DDP)"),
+  data.frame(beta = sapply(res_gmm_ddp, "[[", 2), method = "GMM Martingale Posterior (DDP)"),
+  data.frame(beta = sapply(res_naive_lm, "[[", 2), method = "Naive Martingale Posterior (LM)"),
+  data.frame(beta = sapply(res_gmm_lm, "[[", 2), method = "GMM Martingale Posterior (LM)"),
   data.frame(beta = beta_rossi, method = "Bayesian IV (Rossi)")
 )
 
@@ -74,7 +75,7 @@ p = ggplot(df_plot, aes(x = beta, fill = method, color = method)) +
     text = element_text(size = 14),
     plot.title = element_text(hjust = 0.5)
   ) +
-  coord_cartesian(xlim = c(-1.5, 2.8))
+  coord_cartesian(xlim = c(-0.8, 2.5))
 p
 
 ggsave("mp_example_posterior.pdf", plot = p, width = 8, height = 4)
