@@ -1,4 +1,9 @@
 
+
+##### load packages #####
+library(parallel) # parallel package for parallelisation
+library(BNPmix) # for dependent Dirichlet prior models
+
 ##### Some auxiliary functions #####
 
 # Utility to add intercept
