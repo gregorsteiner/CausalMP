@@ -27,29 +27,36 @@ gen_data = function(n = 50, rho = 1/2){
 set.seed(14)
 d = gen_data(n = 100)
 
-N = 2000
+N = 5000
 B = 500
 
 res_naive_ddp = martingale_posterior(d[, 1], d[, 2], d[, 3], B = B, N = N, type = "DDP", endogeneity = FALSE)
 res_gmm_ddp = martingale_posterior(d[, 1], d[, 2], d[, 3], B = B, N = N, type = "DDP")
-res_naive_lm = martingale_posterior(d[, 1], d[, 2], d[, 3], B = B, N = N, type = "LM", endogeneity = FALSE)
-res_gmm_lm = martingale_posterior(d[, 1], d[, 2], d[, 3], B = B, N = N, type = "LM")
+#res_naive_lm = martingale_posterior(d[, 1], d[, 2], d[, 3], B = B, N = N, type = "LM", endogeneity = FALSE)
+#res_gmm_lm = martingale_posterior(d[, 1], d[, 2], d[, 3], B = B, N = N, type = "LM")
 
-# compare with regular Bayesian IV
+# compare with regular Bayesian IV and DP IV (Conley et al, 2008)
 res_rossi = bayesm::rivGibbs(
   list(y = d[, 1], x = d[, 2], w = matrix(rep(1, nrow(d)), ncol = 1), z = cbind(rep(1, nrow(d)), d[ , 3])),
-  Mcmc = list(R = B, nprint = 0),
+  Mcmc = list(R = 5*B, nprint = 0),
 )
 beta_rossi = as.numeric(res_rossi$betadraw)
+
+res_conley = bayesm::rivDP(
+  list(y = d[, 1], x = d[, 2], z = d[ , 3, drop = FALSE]),
+  Mcmc = list(R = 5*B, nprint = 0),
+)
+beta_conley = as.numeric(res_conley$betadraw)
 
 library(ggplot2)
 # Combine the data for plotting
 df_plot <- rbind(
   data.frame(beta = sapply(res_naive_ddp, "[[", 2), method = "Naive Martingale Posterior (DDP)"),
   data.frame(beta = sapply(res_gmm_ddp, "[[", 2), method = "GMM Martingale Posterior (DDP)"),
-  data.frame(beta = sapply(res_naive_lm, "[[", 2), method = "Naive Martingale Posterior (LM)"),
-  data.frame(beta = sapply(res_gmm_lm, "[[", 2), method = "GMM Martingale Posterior (LM)"),
-  data.frame(beta = beta_rossi, method = "Bayesian IV (Rossi)")
+  #data.frame(beta = sapply(res_naive_lm, "[[", 2), method = "Naive Martingale Posterior (LM)"),
+  #data.frame(beta = sapply(res_gmm_lm, "[[", 2), method = "GMM Martingale Posterior (LM)"),
+  data.frame(beta = beta_rossi, method = "Bayesian IV (Rossi et al)"),
+  data.frame(beta = beta_conley, method = "Bayesian DP IV (Conley et al)")
 )
 
 # trim values
@@ -73,7 +80,7 @@ p = ggplot(df_plot, aes(x = beta, colour = method, fill = method)) +
     text = element_text(size = 14),
     plot.title = element_text(hjust = 0.5)
   ) +
-  coord_cartesian(xlim = c(-5, 6))
+  coord_cartesian(xlim = c(-3, 5))
 p
 
 ggsave("mp_example_posterior.pdf", plot = p, width = 8, height = 4)
@@ -83,7 +90,7 @@ ggsave("mp_example_posterior.pdf", plot = p, width = 8, height = 4)
 par(mfrow = c(2, 3))
 lapply(unique(df_plot$method), function(x){
   y = df_plot[df_plot$method == x, "beta"]
-  y = y[y > -10 & y < 10]
+  y = y[abs(y) < 10]
   plot(density(y), main = x)
 })
 
