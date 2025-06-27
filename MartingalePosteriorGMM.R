@@ -2,7 +2,14 @@
 
 ##### load packages #####
 library(parallel) # parallel package for parallelisation
-library(BNPmix) # for dependent Dirichlet prior models
+
+ensure_package <- function(pkg) {
+  if (!requireNamespace(pkg, quietly = TRUE)) {
+    install.packages(pkg, dependencies = TRUE)
+  }
+  library(pkg, character.only = TRUE)
+}
+ensure_package("BNPmix")
 
 ##### Some auxiliary functions #####
 
