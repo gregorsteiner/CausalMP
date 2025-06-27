@@ -1,0 +1,101 @@
+##### This file implements the simulation setting proposed in Conley et al (2008) #####
+
+source("MartingalePosteriorGMM.R")
+
+## function to generate the data ##
+generate_data = function(n, s = 1, beta = 1){
+  alpha = 0
+  gamma = 0
+  delta = rep(s, 10)
+  Sigma = matrix(c(1, 0.6, 0.6, 1), ncol = 2)
+  
+  u = exp(MASS::mvrnorm(n, c(0, 0), 0.6 * Sigma))
+  z = matrix(runif(10 * n), ncol = 10, nrow = n)
+  x = gamma + z %*% delta + u[, 1]
+  y = alpha + beta * x + u[, 2]
+  return(list(y = y[, 1], x = x[, 1], z = z))
+}
+
+## functions to compute the performance criteria
+mae = function(beta_estimates, true_beta = 1){
+  return(median(abs(beta_estimates - true_beta)))
+}
+coverage = function(ci_lower, ci_upper, true_beta = 1){
+  return(mean((ci_lower < true_beta) & (ci_upper > true_beta)))
+}
+
+## function that extracts the quantities of interest from the fit objects
+compute_quantities = function(fit_list){
+  # create list of the posterior samples
+  post_list = list(
+    sapply(fit_list[[1]], "[[", 2),
+    sapply(fit_list[[2]], "[[", 2),
+    as.numeric(fit_list[[3]]$betadraw),
+    as.numeric(fit_list[[4]]$betadraw)
+  )
+  
+  # return quantities of interest (point estimates and credible/confidence interval)
+  return(list(
+    point_estimates = c(sapply(post_list, median), fit_list[[5]]$coef[2]),
+    ci_lower = c(sapply(post_list, quantile, 0.025), fit_list[[5]]$ci_lower),
+    ci_upper = c(sapply(post_list, quantile, 0.975), fit_list[[5]]$ci_upper)
+  ))
+  
+}
+
+## wrapper function that runs the simulation
+run_simulation = function(s, M = 100, n = 100, beta = 1, N = 1000, B = 500){
+  methods = c("GMM MP (DDP)", "GMM MP (LM)", "Bayes IV", "Bayes IV (DP)", "TSLS")
+  
+  # create storage objects
+  point_estimates = matrix(NA, ncol = M, nrow = length(methods))
+  ci_lower = matrix(NA, ncol = M, nrow = length(methods))
+  ci_upper = matrix(NA, ncol = M, nrow = length(methods))
+  
+  # loop over M iterations
+  for (j in 1:M) {
+    # generate data
+    d = generate_data(n, s = s)
+    
+    # fit models
+    fit_mp_ddp = martingale_posterior(d$y, d$x, d$z, N = N, B = B, type = "DDP")
+    fit_mp_lm = martingale_posterior(d$y, d$x, d$z, N = N, B = B, type = "LM")
+    fit_bayes_iv = bayesm::rivGibbs(
+      list(y = d$y, x = d$x, w = matrix(1, ncol = 1, nrow = n), z = cbind(1, d$z)),
+      Mcmc = list(R = 2*B, keep = 2, nprint = 0),
+    )
+    fit_bayes_iv_dp = bayesm::rivDP(
+        list(y = d$y, x = d$x, z = d$z),
+        Mcmc = list(R = 2*B, keep = 2, nprint = 0),
+      )
+    fit_tsls = tsls(d$y, d$x, d$z, ci = TRUE)
+    
+    quantities = compute_quantities(list(fit_mp_ddp, fit_mp_lm, fit_bayes_iv, fit_bayes_iv_dp, fit_tsls))
+    
+    # extract quantities of interest
+    point_estimates[, j] = quantities$point_estimates
+    ci_lower[, j] = quantities$ci_lower
+    ci_upper[, j] = quantities$ci_upper
+  }
+  
+  # compute performance measures
+  coverage_results <- numeric(length(methods))
+  for (i in 1:length(methods)) {
+    coverage_results[i] <- coverage(ci_lower[i, ], ci_upper[i, ])
+  }
+  
+  res = rbind(
+    "MAE" = apply(point_estimates, 1, mae),
+    "Coverage" = coverage_results
+  )
+  colnames(res) = methods
+  return(round(res, digits = 4))
+}
+
+# Run the simulation
+# We vary s between 0.5, 1, and 1.5 corresponding to weak, moderate and strong instruments
+result = lapply(c(0.5, 1, 1.5), run_simulation)
+saveRDS(result, file = "Results_Conley.RDS")
+
+
+
