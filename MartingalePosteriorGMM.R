@@ -25,12 +25,29 @@ ols = function(y, x){
   ))
 }
 
-tsls = function(y, x, z){
+tsls = function(y, x, z, ci = FALSE){
   Z = add_intercept(z)
   P_Z = Z %*% solve(t(Z) %*% Z) %*% t(Z)
   X = add_intercept(x)
-  beta_hat = solve(t(X) %*% P_Z %*% X, t(X) %*% P_Z %*% y)
-  return(beta_hat)
+  beta_hat = (solve(t(X) %*% P_Z %*% X, t(X) %*% P_Z %*% y))[, 1]
+  
+  if (ci){
+    sigma2 = sum( (y - X %*% beta_hat)^2 ) / nrow(X)
+    cov = sigma2 * solve(t(X) %*% P_Z %*% X)
+    # this computes the CI only for the 2nd component of beta
+    se = sqrt(cov[2, 2])
+    ci_lower = beta_hat[2] - qnorm(0.975) * se
+    ci_upper = beta_hat[2] + qnorm(0.975) * se
+    return(list(
+      coef = beta_hat,
+      ci_lower = ci_lower,
+      ci_upper = ci_upper
+    ))
+  }
+  
+  return(list(
+    coef = beta_hat
+  ))
 }
 
 
@@ -116,8 +133,8 @@ martingale_posterior = function(y, x, z, B = 100, N = 1000, type = "DDP", endoge
   
   if(type == "DDP"){
     prior = list(strength = 1, discount = 0)
-    grid_y = seq(-7, 7, length.out = 100)
-    grid_x = rbind(c(0, 0), c(1, 0), c(0, 1), c(1, 1))
+    grid_y = c(0)
+    grid_x = matrix(0, ncol = ncol(X), nrow = 1)
     mcmc = list(niter = 1000 + B, nburn = 1000, print_message = FALSE)
     output = list(grid_x = grid_x, grid_y = grid_y, out_type = "FULL", out_param = TRUE)
     ddp_fit = PYregression(y = y, x = X, prior = prior, mcmc = mcmc, output = output)
@@ -139,7 +156,7 @@ martingale_posterior = function(y, x, z, B = 100, N = 1000, type = "DDP", endoge
     }
     # compute the estimates
     if (endogeneity) {
-      beta_est = tsls(y_full, X_full[, 1], X_full[, 2])
+      beta_est = tsls(y_full, X_full[, 1], X_full[, 2])$coef
     } else {
       beta_est = ols(y_full, X_full[, 1])$coef
     }
