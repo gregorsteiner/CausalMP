@@ -79,16 +79,19 @@ run_simulation = function(s, M = 100, n = 100, beta = 1, N = 1000, B = 500){
   }
   
   # compute performance measures
-  coverage_results <- numeric(length(methods))
+  coverage_results = numeric(length(methods))
+  mean_interval_length = numeric(length(methods))
   for (i in 1:length(methods)) {
-    coverage_results[i] <- coverage(ci_lower[i, ], ci_upper[i, ])
+    coverage_results[i] = coverage(ci_lower[i, ], ci_upper[i, ])
+    mean_interval_length[i] = mean(ci_upper[i, ] - ci_lower[i, ])
   }
   
-  res = rbind(
+  res = cbind(
     "MAE" = apply(point_estimates, 1, mae),
-    "Coverage" = coverage_results
+    "Coverage" = coverage_results,
+    "MIL" = mean_interval_length
   )
-  colnames(res) = methods
+  rownames(res) = methods
   return(round(res, digits = 4))
 }
 
