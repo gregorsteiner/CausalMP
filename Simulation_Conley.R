@@ -100,7 +100,7 @@ run_simulation = function(s, M = 100, n = 100, beta = 1, N = 1000, B = 500){
 # Run the simulation
 # We vary s between 0.5, 1, and 1.5 corresponding to weak, moderate and strong instruments
 ss = c(0.5, 1, 1.5)
-result = lapply(ss, run_simulation, M = 5, N = 200, B = 50)
+result = lapply(ss, run_simulation)
 setNames(result, paste0("s = ", ss))
 saveRDS(result, file = "Results_Conley.RDS")
 
