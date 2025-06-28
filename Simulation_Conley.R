@@ -28,17 +28,17 @@ coverage = function(ci_lower, ci_upper, true_beta = 1){
 compute_quantities = function(fit_list){
   # create list of the posterior samples
   post_list = list(
-    sapply(fit_list[[1]], "[[", 2),
-    sapply(fit_list[[2]], "[[", 2),
-    as.numeric(fit_list[[3]]$betadraw),
-    as.numeric(fit_list[[4]]$betadraw)
+    sapply(fit_list$MP_DDP, "[[", 2),
+    sapply(fit_list$MP_LM, "[[", 2),
+    as.numeric(fit_list$Bayes_IV$betadraw),
+    as.numeric(fit_list$Bayes_IV_DP$betadraw)
   )
   
   # return quantities of interest (point estimates and credible/confidence interval)
   return(list(
-    point_estimates = c(sapply(post_list, median), fit_list[[5]]$coef[2]),
-    ci_lower = c(sapply(post_list, quantile, 0.025), fit_list[[5]]$ci_lower),
-    ci_upper = c(sapply(post_list, quantile, 0.975), fit_list[[5]]$ci_upper)
+    point_estimates = c(sapply(post_list, median), fit_list$TSLS$coef[2]),
+    ci_lower = c(sapply(post_list, quantile, 0.025), fit_list$TSLS$ci_lower),
+    ci_upper = c(sapply(post_list, quantile, 0.975), fit_list$TSLS$ci_upper)
   ))
   
 }
@@ -58,19 +58,21 @@ run_simulation = function(s, M = 100, n = 100, beta = 1, N = 1000, B = 500){
     d = generate_data(n, s = s)
     
     # fit models
-    fit_mp_ddp = martingale_posterior(d$y, d$x, d$z, N = N, B = B, type = "DDP")
-    fit_mp_lm = martingale_posterior(d$y, d$x, d$z, N = N, B = B, type = "LM")
-    fit_bayes_iv = bayesm::rivGibbs(
-      list(y = d$y, x = d$x, w = matrix(1, ncol = 1, nrow = n), z = cbind(1, d$z)),
-      Mcmc = list(R = 2*B, keep = 2, nprint = 0),
-    )
-    fit_bayes_iv_dp = bayesm::rivDP(
+    fit_list = list(
+      "MP_DDP" = martingale_posterior(d$y, d$x, d$z, N = N, B = B, type = "DDP"),
+      "MP_LM" = martingale_posterior(d$y, d$x, d$z, N = N, B = B, type = "LM"),
+      "Bayes_IV" = bayesm::rivGibbs(
+        list(y = d$y, x = d$x, w = matrix(1, ncol = 1, nrow = n), z = cbind(1, d$z)),
+        Mcmc = list(R = 2*B, keep = 2, nprint = 0),
+      ),
+      "Bayes_IV_DP" = bayesm::rivDP(
         list(y = d$y, x = d$x, z = d$z),
         Mcmc = list(R = 2*B, keep = 2, nprint = 0),
-      )
-    fit_tsls = tsls(d$y, d$x, d$z, ci = TRUE)
+      ),
+      "TSLS" = tsls(d$y, d$x, d$z, ci = TRUE)
+    )
     
-    quantities = compute_quantities(list(fit_mp_ddp, fit_mp_lm, fit_bayes_iv, fit_bayes_iv_dp, fit_tsls))
+    quantities = compute_quantities(fit_list)
     
     # extract quantities of interest
     point_estimates[, j] = quantities$point_estimates
@@ -97,7 +99,9 @@ run_simulation = function(s, M = 100, n = 100, beta = 1, N = 1000, B = 500){
 
 # Run the simulation
 # We vary s between 0.5, 1, and 1.5 corresponding to weak, moderate and strong instruments
-result = lapply(c(0.5, 1, 1.5), run_simulation)
+ss = c(0.5, 1, 1.5)
+result = lapply(ss, run_simulation, M = 5, N = 200, B = 50)
+setNames(result, paste0("s = ", ss))
 saveRDS(result, file = "Results_Conley.RDS")
 
 
