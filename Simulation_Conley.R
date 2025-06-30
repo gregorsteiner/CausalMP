@@ -1,6 +1,7 @@
 ##### This file implements the simulation setting proposed in Conley et al (2008) #####
 
-source("MartingalePosteriorGMM.R")
+source("MartingalePosteriorGMM.R") # load the Martingale posterior function
+ensure_package("bayesm") # The bayesm package is needed for the competing methods
 
 ## function to generate the data ##
 generate_data = function(n, s = 1, beta = 1){
@@ -53,6 +54,7 @@ run_simulation = function(s, M = 100, n = 100, beta = 1, N = 1000, B = 500){
   ci_upper = matrix(NA, ncol = M, nrow = length(methods))
   
   # loop over M iterations
+  pb <- txtProgressBar(min = 0, max = M, style = 3)
   for (j in 1:M) {
     # generate data
     d = generate_data(n, s = s)
@@ -78,6 +80,9 @@ run_simulation = function(s, M = 100, n = 100, beta = 1, N = 1000, B = 500){
     point_estimates[, j] = quantities$point_estimates
     ci_lower[, j] = quantities$ci_lower
     ci_upper[, j] = quantities$ci_upper
+    
+    # Update the progress bar
+    setTxtProgressBar(pb, j)
   }
   
   # compute performance measures
