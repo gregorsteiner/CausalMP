@@ -2,14 +2,7 @@
 
 ##### load packages #####
 library(parallel) # parallel package for parallelisation
-
-ensure_package <- function(pkg) {
-  if (!requireNamespace(pkg, quietly = TRUE)) {
-    install.packages(pkg, dependencies = TRUE)
-  }
-  library(pkg, character.only = TRUE)
-}
-ensure_package("BNPmix")
+library(BNPmix)
 
 ##### Some auxiliary functions #####
 
@@ -136,15 +129,15 @@ bayes_lin_reg = function(y, X, N){
 ##### Martingale posterior function #####
 martingale_posterior = function(y, x, z, B = 100, N = 1000, type = "DDP", endogeneity = TRUE) {
   n = length(y)
-  X = cbind(x, z)
+  XZ = cbind(x)
   
   if(type == "DDP"){
     prior = list(strength = 1, discount = 0)
     grid_y = c(0)
-    grid_x = matrix(0, ncol = ncol(X), nrow = 1)
+    grid_x = matrix(0, ncol = ncol(XZ), nrow = 1)
     mcmc = list(niter = 1000 + B, nburn = 1000, print_message = FALSE)
     output = list(grid_x = grid_x, grid_y = grid_y, out_type = "FULL", out_param = TRUE)
-    ddp_fit = PYregression(y = y, x = X, prior = prior, mcmc = mcmc, output = output)
+    ddp_fit = PYregression(y = y, x = XZ, prior = prior, mcmc = mcmc, output = output)
   } else {ddp_fit = NULL}
   
   # initialise cluster for parallelisation
@@ -152,24 +145,25 @@ martingale_posterior = function(y, x, z, B = 100, N = 1000, type = "DDP", endoge
   parallel::clusterExport(cl, varlist = c("bayesian_bootstrap", "ddp_predictive_sequence", "bayes_lin_reg", "ols", "tsls", "add_intercept"))
 
   # get a posterior samplefor each predictive sequence (loop over 1:B -> B posterior samples)
-  posterior = parallel::parLapply(cl, 1:B, function(j, y, X, N, ddp_fit, type, endogeneity) {
-  #posterior = lapply(1:B, function(j, data, N, type, endogeneity) {  
+  posterior = parallel::parLapply(cl, 1:B, function(j, y, x, z, N, ddp_fit, type, endogeneity) {
+  #posterior = lapply(1:B, function(j, y, x, z, N, ddp_fit, type, endogeneity) {  
     # generate new X via Bayesian bootstrap
-    X_full = bayesian_bootstrap(X, N)
+    x_full = bayesian_bootstrap(x, N)
+    z_full = bayesian_bootstrap(z, N)
     if(type == "DDP"){
-      y_full = ddp_predictive_sequence(j, N, X_full, ddp_fit)
+      y_full = ddp_predictive_sequence(j, N, cbind(x_full), ddp_fit)
     } else if(type == "LM"){
-      y_full = bayes_lin_reg(y, X_full, N)
+      y_full = bayes_lin_reg(y, cbind(x_full), N)
     }
     # compute the estimates
     if (endogeneity) {
-      beta_est = tsls(y_full, X_full[, 1], X_full[, 2])$coef
+      beta_est = tsls(y_full, x_full, z_full)$coef
     } else {
-      beta_est = ols(y_full, X_full[, 1])$coef
+      beta_est = ols(y_full, x_full)$coef
     }
     
     return(beta_est)
-  }, y, X, N, ddp_fit, type, endogeneity)
+  }, y, x, z, N, ddp_fit, type, endogeneity)
   
   # stop cluster
   parallel::stopCluster(cl)

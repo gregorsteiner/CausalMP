@@ -1,7 +1,7 @@
 ##### This file implements the simulation setting proposed in Conley et al (2008) #####
 
 source("MartingalePosteriorGMM.R") # load the Martingale posterior function
-ensure_package("bayesm") # The bayesm package is needed for the competing methods
+library(bayesm) # The bayesm package is needed for the competing methods
 
 ## function to generate the data ##
 generate_data = function(n, s = 1, beta = 1){
@@ -14,7 +14,7 @@ generate_data = function(n, s = 1, beta = 1){
   z = matrix(runif(10 * n), ncol = 10, nrow = n)
   x = gamma + z %*% delta + u[, 1]
   y = alpha + beta * x + u[, 2]
-  return(list(y = y[, 1], x = x[, 1], z = z))
+  return(list(y = y[, 1], x = x, z = z))
 }
 
 ## functions to compute the performance criteria
@@ -64,11 +64,11 @@ run_simulation = function(s, M = 100, n = 100, beta = 1, N = 1000, B = 500){
       "MP_DDP" = martingale_posterior(d$y, d$x, d$z, N = N, B = B, type = "DDP"),
       "MP_LM" = martingale_posterior(d$y, d$x, d$z, N = N, B = B, type = "LM"),
       "Bayes_IV" = bayesm::rivGibbs(
-        list(y = d$y, x = d$x, w = matrix(1, ncol = 1, nrow = n), z = cbind(1, d$z)),
+        list(y = d$y, x = d$x[, 1], w = matrix(1, ncol = 1, nrow = n), z = cbind(1, d$z)),
         Mcmc = list(R = 2*B, keep = 2, nprint = 0),
       ),
       "Bayes_IV_DP" = bayesm::rivDP(
-        list(y = d$y, x = d$x, z = d$z),
+        list(y = d$y, x = d$x[, 1], z = d$z),
         Mcmc = list(R = 2*B, keep = 2, nprint = 0),
       ),
       "TSLS" = tsls(d$y, d$x, d$z, ci = TRUE)
@@ -87,19 +87,19 @@ run_simulation = function(s, M = 100, n = 100, beta = 1, N = 1000, B = 500){
   
   # compute performance measures
   coverage_results = numeric(length(methods))
-  mean_interval_length = numeric(length(methods))
+  median_interval_length = numeric(length(methods))
   for (i in 1:length(methods)) {
     coverage_results[i] = coverage(ci_lower[i, ], ci_upper[i, ])
-    mean_interval_length[i] = mean(ci_upper[i, ] - ci_lower[i, ])
+    median_interval_length[i] = median(ci_upper[i, ] - ci_lower[i, ])
   }
   
   res = cbind(
     "MAE" = apply(point_estimates, 1, mae),
     "Coverage" = coverage_results,
-    "MIL" = mean_interval_length
+    "MIL" = median_interval_length
   )
   rownames(res) = methods
-  return(round(res, digits = 4))
+  return(res)
 }
 
 # Run the simulation
@@ -109,5 +109,7 @@ result = lapply(ss, run_simulation)
 setNames(result, paste0("s = ", ss))
 saveRDS(result, file = "Results_Conley.RDS")
 
+
+run_simulation(0.5, M = 10, N = 500, B = 500)
 
 
