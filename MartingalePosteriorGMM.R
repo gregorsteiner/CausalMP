@@ -65,11 +65,22 @@ bayesian_bootstrap = function(x, N){
   return(x_full)
 }
 
+# function to fit the initial DDP object (based on the BNPmix package)
+init_ddp_fit = function(y, x, B){
+  prior = list(strength = 1, discount = 0)
+  grid_y = c(0)
+  grid_x = matrix(0, ncol = ncol(x), nrow = 1)
+  mcmc = list(niter = 1000 + B, nburn = 1000, print_message = FALSE)
+  output = list(grid_x = grid_x, grid_y = grid_y, out_type = "FULL", out_param = TRUE)
+  ddp_fit = BNPmix::PYregression(y = y, x = x, prior = prior, mcmc = mcmc, output = output)
+  return(ddp_fit)
+}
+
 # function generating a predictive sequence based on the dependent Dirichlet process (DDP)
 ddp_predictive_sequence = function(idx, N, X, fit){
   if(!inherits(fit, "BNPdens")) stop("`fit` needs to be a BNPdens object.")
   n = ncol(fit$clust)
-  alpha = 1 # strength parameter of the DP
+  alpha = 0 # strength parameter of the DP
   clust = numeric(N); clust[1:n] = fit$clust[idx, ] # the cluster allocation for the i-th posterior sample
   beta = fit$beta[[idx]]
   sigma2 = fit$sigma2[[idx]][, 1]
@@ -132,17 +143,12 @@ martingale_posterior = function(
     B = 100, N = 1000, type = "DDP",
     criterion_function = function(y, x, z) tsls(y, x, z)$coef
   ) {
-  n = length(y)
   
-  if(type == "DDP"){
-    X = cbind(x)
-    prior = list(strength = 1, discount = 0)
-    grid_y = c(0)
-    grid_x = matrix(0, ncol = ncol(X), nrow = 1)
-    mcmc = list(niter = 1000 + B, nburn = 1000, print_message = FALSE)
-    output = list(grid_x = grid_x, grid_y = grid_y, out_type = "FULL", out_param = TRUE)
-    ddp_fit = PYregression(y = y, x = X, prior = prior, mcmc = mcmc, output = output)
-  } else {ddp_fit = NULL}
+  if(type == "DDP"){ # If using the DDP to make predictions, fit the initial object
+    ddp_fit = init_ddp_fit(y, x, B)
+  } else {
+    ddp_fit = NULL
+  }
   
   # initialise cluster for parallelisation
   cl = parallel::makeCluster(parallel::detectCores() - 4)

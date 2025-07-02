@@ -109,3 +109,5 @@ result = lapply(ss, run_simulation)
 setNames(result, paste0("s = ", ss))
 saveRDS(result, file = "Results_Conley.RDS")
 
+
+
