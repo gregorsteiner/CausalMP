@@ -45,8 +45,8 @@ compute_quantities = function(fit_list){
 }
 
 ## wrapper function that runs the simulation
-run_simulation = function(s, M = 100, n = 100, beta = 1, N = 1000, B = 500){
-  methods = c("GMM MP (DDP)", "GMM MP (LM)", "Bayes IV", "Bayes IV (DP)", "TSLS")
+run_simulation = function(s, M = 100, n = 100, beta = 1, N = 500, B = 500){
+  methods = c("MPIV (DDP)", "MPIV (LM)", "Bayes IV", "Bayes IV (DP)", "TSLS")
   
   # create storage objects
   point_estimates = matrix(NA, ncol = M, nrow = length(methods))

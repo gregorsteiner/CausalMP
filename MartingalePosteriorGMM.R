@@ -129,15 +129,15 @@ bayes_lin_reg = function(y, X, N){
 ##### Martingale posterior function #####
 martingale_posterior = function(y, x, z, B = 100, N = 1000, type = "DDP", endogeneity = TRUE) {
   n = length(y)
-  XZ = cbind(x)
   
   if(type == "DDP"){
+    X = cbind(x)
     prior = list(strength = 1, discount = 0)
     grid_y = c(0)
-    grid_x = matrix(0, ncol = ncol(XZ), nrow = 1)
+    grid_x = matrix(0, ncol = ncol(X), nrow = 1)
     mcmc = list(niter = 1000 + B, nburn = 1000, print_message = FALSE)
     output = list(grid_x = grid_x, grid_y = grid_y, out_type = "FULL", out_param = TRUE)
-    ddp_fit = PYregression(y = y, x = XZ, prior = prior, mcmc = mcmc, output = output)
+    ddp_fit = PYregression(y = y, x = X, prior = prior, mcmc = mcmc, output = output)
   } else {ddp_fit = NULL}
   
   # initialise cluster for parallelisation
@@ -151,9 +151,9 @@ martingale_posterior = function(y, x, z, B = 100, N = 1000, type = "DDP", endoge
     x_full = bayesian_bootstrap(x, N)
     z_full = bayesian_bootstrap(z, N)
     if(type == "DDP"){
-      y_full = ddp_predictive_sequence(j, N, cbind(x_full), ddp_fit)
+      y_full = ddp_predictive_sequence(j, N, x_full, ddp_fit)
     } else if(type == "LM"){
-      y_full = bayes_lin_reg(y, cbind(x_full), N)
+      y_full = bayes_lin_reg(y, x_full, N)
     }
     # compute the estimates
     if (endogeneity) {
