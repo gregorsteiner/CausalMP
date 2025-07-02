@@ -12,7 +12,7 @@ add_intercept = function(X) {
 }
 
 # functions to fit OLS and TSLS
-ols = function(y, x){
+ols = function(y, x, z){
   n = length(y)
   X = add_intercept(x)
   X_t_X_inv = solve(t(X) %*% X)
@@ -127,7 +127,11 @@ bayes_lin_reg = function(y, X, N){
 
 
 ##### Martingale posterior function #####
-martingale_posterior = function(y, x, z, B = 100, N = 1000, type = "DDP", endogeneity = TRUE) {
+martingale_posterior = function(
+    y, x, z,
+    B = 100, N = 1000, type = "DDP",
+    criterion_function = function(y, x, z) tsls(y, x, z)$coef
+  ) {
   n = length(y)
   
   if(type == "DDP"){
@@ -145,25 +149,24 @@ martingale_posterior = function(y, x, z, B = 100, N = 1000, type = "DDP", endoge
   parallel::clusterExport(cl, varlist = c("bayesian_bootstrap", "ddp_predictive_sequence", "bayes_lin_reg", "ols", "tsls", "add_intercept"))
 
   # get a posterior samplefor each predictive sequence (loop over 1:B -> B posterior samples)
-  posterior = parallel::parLapply(cl, 1:B, function(j, y, x, z, N, ddp_fit, type, endogeneity) {
+  posterior = parallel::parLapply(cl, 1:B, function(j, y, x, z, N, ddp_fit, type, criterion_function) {
   #posterior = lapply(1:B, function(j, y, x, z, N, ddp_fit, type, endogeneity) {  
-    # generate new X via Bayesian bootstrap
+    # generate new X and Z via Bayesian bootstrap
     x_full = bayesian_bootstrap(x, N)
     z_full = bayesian_bootstrap(z, N)
+    
+    # Predict corresponding y
     if(type == "DDP"){
       y_full = ddp_predictive_sequence(j, N, x_full, ddp_fit)
     } else if(type == "LM"){
       y_full = bayes_lin_reg(y, x_full, N)
     }
-    # compute the estimates
-    if (endogeneity) {
-      beta_est = tsls(y_full, x_full, z_full)$coef
-    } else {
-      beta_est = ols(y_full, x_full)$coef
-    }
+    
+    # compute the quantity of interest
+    beta_est = criterion_function(y_full, x_full, z_full)
     
     return(beta_est)
-  }, y, x, z, N, ddp_fit, type, endogeneity)
+  }, y, x, z, N, ddp_fit, type, criterion_function)
   
   # stop cluster
   parallel::stopCluster(cl)
