@@ -1,6 +1,6 @@
 # This file implements prediction based on Mondrian trees
 # See e.g. Lakshminarayanan et. al. (2014, 2016)
-# Some parts of the code are taken/adapted from https://github.com/WGUNDERWOOD/MondrianForests.jl
+# Some parts of the code are adapted from https://github.com/WGUNDERWOOD/MondrianForests.jl
 
 using LinearAlgebra, Distributions
 
@@ -19,18 +19,18 @@ struct MondrianBlock
 end
 
 struct MondrianTree
-    non_leaf_nodes::Vector{String} # Vector of all nodes
-    leaf_nodes::Vector{String} # Vector of only the leaf nodes
-    δ::Vector{Int} # Vector of splitting dimensions (corresponding to the vector of non-leaf nodes)
-    ξ::Vector{Float64} # Vector of splitting locations (corresponding to the vector of non-leaf nodes)
-    τ::Vector{Float64} # Vector of splitting times (corresponding to the vector of non-leaf nodes)
+    nodes::Vector{String} # Vector of all nodes
+    is_leaf::Vector{Bool} # Boolean vector indicating which nodes are leaf nodes
+    N::Vector{Vector{Int}} # Vector of Indices corresponding to each node
+    δ::Vector{Union{Int, Nothing}} # Vector of splitting dimensions (corresponding to the vector of non-leaf nodes)
+    ξ::Vector{Union{Float64, Nothing}} # Vector of splitting locations (corresponding to the vector of non-leaf nodes)
+    τ::Vector{Union{Float64, Nothing}} # Vector of splitting times (corresponding to the vector of non-leaf nodes)
     min_samples_split::Int # minimum number of splitting samples (only split if the number of samples at a node is greater or equal)
-    N::Vector{Vector{Float64}} # Vector of Indices corresponding to each node
     X::Matrix{Float64} # Matrix of predictors
     y::Vector{Float64} # Vector of labels
 end
 
-
+# Construct a nested Mondrian block object
 function MondrianBlock(id::String, X::Matrix{Float64}, N::Vector{Int}, min_samples_split::Int, creation_time::Float64)
     n, d = size(X)
     if n >= min_samples_split
@@ -53,10 +53,37 @@ function MondrianBlock(id::String, X::Matrix{Float64}, N::Vector{Int}, min_sampl
 end
 
 
+# Auxiliary functions to collect the data from the Mondrian blocks
+function collect_data!(vec::Vector, node::MondrianBlock, field::Symbol)
+    # Collect the data from this node
+    push!(vec, getfield(node, field))
 
-n = 100
+    # If there is a split recurse on left and right children
+    if node.split
+        collect_data!(vec, node.L, field)  # Left child
+        collect_data!(vec, node.R, field)  # Right child
+    end
+end
+
+function collect_data(node::MondrianBlock, field::Symbol)
+    values = []
+    collect_data!(values, node, field)
+    return values
+end
+
+# Constructor for the tree structure
+function MondrianTree(y::Vector{Float64}, X::Matrix{Float64}, min_samples_split::Int)
+    n, d = size(X)
+    block = MondrianBlock("", X, collect(1:n), min_samples_split, 0.0)
+    values = map(f -> collect_data(block, f), [:id, :split, :N, :δ, :ξ, :τ])
+    tree = MondrianTree(values[1], .!values[2], values[3], values[4], values[5], values[6], min_samples_split, X, y)
+    return tree
+end
+
+
+n = 50
 X = rand(Normal(0, 1), n, 10)
-res = MondrianBlock("", X, collect(1:n), 50, 0.0)
+y = rand(Normal(0, 1), n)
 
 
-
+tree = MondrianTree(y, X, 10)
