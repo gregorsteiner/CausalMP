@@ -12,7 +12,7 @@ struct MondrianBlock
     split::Bool # true if split (otherwise this is a leaf node)
     δ::Union{Int, Nothing} # split dimension
     ξ::Union{Float64, Nothing} # split location
-    τ::Union{Float64, Nothing} # split time
+    τ::Float64 # split time
     L::Union{MondrianBlock, Nothing} # left child
     R::Union{MondrianBlock, Nothing} # right child
     parent::Union{String, Nothing} # id of parent node
@@ -22,9 +22,9 @@ struct MondrianTree
     nodes::Vector{String} # Vector of all nodes
     is_leaf::Vector{Bool} # Boolean vector indicating which nodes are leaf nodes
     N::Vector{Vector{Int}} # Vector of Indices corresponding to each node
-    δ::Vector{Union{Int, Nothing}} # Vector of splitting dimensions (corresponding to the vector of non-leaf nodes)
-    ξ::Vector{Union{Float64, Nothing}} # Vector of splitting locations (corresponding to the vector of non-leaf nodes)
-    τ::Vector{Union{Float64, Nothing}} # Vector of splitting times (corresponding to the vector of non-leaf nodes)
+    δ::Vector{Union{Int, Nothing}} # Vector of splitting dimensions (nothing for leaf nodes)
+    ξ::Vector{Union{Float64, Nothing}} # Vector of splitting locations (nothing for leaf nodes)
+    τ::Vector{Float64} # Vector of splitting times (Inf for leaf nodes)
     min_samples_split::Int # minimum number of splitting samples (only split if the number of samples at a node is greater or equal)
     X::Matrix{Float64} # Matrix of predictors
     y::Vector{Float64} # Vector of labels
@@ -47,7 +47,7 @@ function MondrianBlock(id::String, X::Matrix{Float64}, N::Vector{Int}, min_sampl
         block_right = MondrianBlock(id * "R", X_right, N_right, min_samples_split, creation_time + E)
         block = MondrianBlock(id, X, N, true, split_axis, split_location, creation_time + E, block_left, block_right, ifelse(id == "", nothing, id[1:(end-1)]))
     else
-        block = MondrianBlock(id, X, N, false, nothing, nothing, nothing, nothing, nothing, ifelse(id == "", nothing, id[1:(end-1)]))
+        block = MondrianBlock(id, X, N, false, nothing, nothing, Inf, nothing, nothing, ifelse(id == "", nothing, id[1:(end-1)]))
     end
     return block
 end
@@ -80,6 +80,36 @@ function MondrianTree(y::Vector{Float64}, X::Matrix{Float64}, min_samples_split:
     return tree
 end
 
+# predicti function for MondrianTree objects
+function predict(tree::MondrianTree, x_new::Vector{Float64})
+    n, d = size(tree.X)
+    node = ""
+    τ_parent = 0.0
+    p_not_separated_yet = 1.0
+    w = Float64[]
+    while true
+        node_id = findfirst(node .== tree.nodes)
+        Δ = tree.τ[node_id] - τ_parent
+        upper, lower = map(f -> map(f, eachcol(tree.X[tree.N[node_id], :])), (minimum, maximum))
+        η_x = sum(max.(x_new - upper, zeros(d)) + max.(lower - x_new, zeros(d)))
+        p_x = 1 - exp(-Δ * η_x)
+        if tree.is_leaf[node_id]
+            append!(w, (1 - p_x) * p_not_separated_yet)
+            break
+        else
+            append!(w, p_x * p_not_separated_yet)
+            p_not_separated_yet = (1 - p_x) * p_not_separated_yet
+            τ_parent = tree.τ[node_id]
+            if x_new[tree.δ[node_id]] <= tree.ξ[node_id]
+                node = node * "L"
+            else
+                node = node * "R"
+            end
+        end
+    end
+    return w
+end
+
 
 n = 50
 X = rand(Normal(0, 1), n, 10)
@@ -87,3 +117,5 @@ y = rand(Normal(0, 1), n)
 
 
 tree = MondrianTree(y, X, 10)
+w = predict(tree, X[10,:])
+
