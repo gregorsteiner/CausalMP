@@ -80,6 +80,49 @@ function MondrianTree(y::Vector{Float64}, X::Matrix{Float64}, min_samples_split:
     return tree
 end
 
+# extend the tree
+function extend_mondrian_block(block::MondrianBlock, x_new::Vector{Float64}, τ_parent::Float64, x_new_idx::Int)
+    n, d = size(block.X)
+    lower, upper = map(f -> map(f, eachcol(block.X)), (minimum, maximum))
+    el, eu = (max.(lower - x_new, zeros(d)), max.(x_new - upper, zeros(d)))
+    size_cell = sum(el + eu)
+    E = rand(Exponential(1 / size_cell))
+    if τ_parent + E < block.τ
+        split_probabilities = collect(el + eu) ./ size_cell
+        split_axis = rand(DiscreteNonParametric(1:d, split_probabilities))
+        split_location = ifelse(
+            x_new[split_axis] > upper[split_axis],
+            rand(Uniform(upper[split_axis], x_new[split_axis])), 
+            rand(Uniform(x_new[split_axis], lower[split_axis]))
+        )
+        split_bool = block.X[:, split_axis] .<= split_location
+        if x_new[split_axis]  <= split_location
+            block_left = MondrianBlock(block.id * "L", x_new, [x_new_idx], min_samples_split, block.τ)
+            block_right = MondrianBlock(block.id * "R", block.X, block.N, min_samples_split, block.τ)
+        else
+            block_left = MondrianBlock(block.id * "L", block.X, block.N, min_samples_split, block.τ)
+            block_right = MondrianBlock(block.id * "R", x_new, [x_new_idx], min_samples_split, block.τ)
+        end
+        block = MondrianBlock(block.id, [block.X; new_x], push!(block.N, x_new_idx), true, split_axis, split_location, τ_parent + E, block_left, block_right, block.parent)
+    else
+        if block.split
+            if x_new[block.δ] <= block.ξ
+                block = extend_mondrian_block(block.L, x_new, block.τ, x_new_idx)
+            else
+                block = extend_mondrian_block(block.R, x_new, block.τ, x_new_idx)
+            end
+        else
+            block = block
+        end
+    end
+    return block
+end
+
+function extend(tree::MondrianTree, y_new::Float64, x_new::Vector{Float64})
+
+
+end
+
 # predict function for MondrianTree objects
 # we use the approximation using the empirical mean and variance for each node
 # see Lakshminarayanan et. al. (2016, Appendix C)
@@ -97,14 +140,14 @@ function predict(tree::MondrianTree, x_new::Vector{Float64})
         p_x = 1 - exp(-Δ * η_x)
 
         y_node = tree.y[tree.N[node_id]] # get all the y-values in the node
-        append!(m, mean(y_node))
-        append!(v, std(y_node))
+        push!(m, mean(y_node))
+        push!(v, std(y_node; corrected = false))
 
         if tree.is_leaf[node_id]
-            append!(w, (1 - p_x) * p_not_separated_yet)
+            push!(w, (1 - p_x) * p_not_separated_yet)
             break
         else
-            append!(w, p_x * p_not_separated_yet)
+            push!(w, p_x * p_not_separated_yet)
             p_not_separated_yet = (1 - p_x) * p_not_separated_yet
             τ_parent = tree.τ[node_id]
             if x_new[tree.δ[node_id]] <= tree.ξ[node_id]
@@ -123,12 +166,28 @@ function predict(tree::MondrianTree, x_new::Vector{Float64})
 end
 
 
-n = 50
-X = rand(Normal(0, 1), n, 10)
-y = rand(Normal(0, 1), n)
 
 
-tree = MondrianTree(y, X, 10)
-res = predict(tree, X[10,:])
+# test
+function generate_data(n::Int, s::Real = 1, beta::Real = 1)
+    alpha = 0.0
+    gamma = 0.0
+    delta = fill(s, 10)
+    Sigma = [1.0 0.6; 0.6 1.0]
+
+    mvnorm = MvNormal(zeros(2), 0.6 * Sigma)
+    u = exp.(rand(mvnorm, n)')  # size (n, 2)
+
+    z = rand(Uniform(0, 1), n, 10)
+    x = gamma .+ z * delta .+ u[:, 1]
+    y = alpha .+ beta * x .+ u[:, 2]
+
+    return (y = y, x = x, z = z)
+end
 
 
+n = 100
+y, x, z = generate_data(n)
+tree = MondrianTree(y, x[:,:], 10)
+x_new = [10.0]
+res = predict(tree, x_new)
