@@ -80,19 +80,26 @@ function MondrianTree(y::Vector{Float64}, X::Matrix{Float64}, min_samples_split:
     return tree
 end
 
-# predicti function for MondrianTree objects
+# predict function for MondrianTree objects
+# we use the approximation using the empirical mean and variance for each node
+# see Lakshminarayanan et. al. (2016, Appendix C)
 function predict(tree::MondrianTree, x_new::Vector{Float64})
     n, d = size(tree.X)
     node = ""
     τ_parent = 0.0
     p_not_separated_yet = 1.0
-    w = Float64[]
+    w, m, v = (Float64[], Float64[], Float64[]) # storage objects for the weights, mean, and sd for each node on the path
     while true
         node_id = findfirst(node .== tree.nodes)
         Δ = tree.τ[node_id] - τ_parent
         upper, lower = map(f -> map(f, eachcol(tree.X[tree.N[node_id], :])), (minimum, maximum))
         η_x = sum(max.(x_new - upper, zeros(d)) + max.(lower - x_new, zeros(d)))
         p_x = 1 - exp(-Δ * η_x)
+
+        y_node = tree.y[tree.N[node_id]] # get all the y-values in the node
+        append!(m, mean(y_node))
+        append!(v, std(y_node))
+
         if tree.is_leaf[node_id]
             append!(w, (1 - p_x) * p_not_separated_yet)
             break
@@ -107,7 +114,12 @@ function predict(tree::MondrianTree, x_new::Vector{Float64})
             end
         end
     end
-    return w
+
+    # Return the posterior predictive (mixture of Gaussians)
+    # Note that w may not exactly sum to 1 (I suppose this is due to rounding errors)
+    # So we divide by its sum
+    return MixtureModel(map((μ, σ) -> Normal(μ, σ), m, v), w ./ sum(w))
+    #return w
 end
 
 
@@ -117,5 +129,6 @@ y = rand(Normal(0, 1), n)
 
 
 tree = MondrianTree(y, X, 10)
-w = predict(tree, X[10,:])
+res = predict(tree, X[10,:])
+
 
