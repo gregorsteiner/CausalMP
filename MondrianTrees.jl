@@ -80,47 +80,24 @@ function MondrianTree(y::Vector{Float64}, X::Matrix{Float64}, min_samples_split:
     return tree
 end
 
-# extend the tree
-function extend_mondrian_block(block::MondrianBlock, x_new::Vector{Float64}, τ_parent::Float64, x_new_idx::Int)
-    n, d = size(block.X)
-    lower, upper = map(f -> map(f, eachcol(block.X)), (minimum, maximum))
-    el, eu = (max.(lower - x_new, zeros(d)), max.(x_new - upper, zeros(d)))
-    size_cell = sum(el + eu)
-    E = rand(Exponential(1 / size_cell))
-    if τ_parent + E < block.τ
-        split_probabilities = collect(el + eu) ./ size_cell
-        split_axis = rand(DiscreteNonParametric(1:d, split_probabilities))
-        split_location = ifelse(
-            x_new[split_axis] > upper[split_axis],
-            rand(Uniform(upper[split_axis], x_new[split_axis])), 
-            rand(Uniform(x_new[split_axis], lower[split_axis]))
-        )
-        split_bool = block.X[:, split_axis] .<= split_location
-        if x_new[split_axis]  <= split_location
-            block_left = MondrianBlock(block.id * "L", x_new, [x_new_idx], min_samples_split, block.τ)
-            block_right = MondrianBlock(block.id * "R", block.X, block.N, min_samples_split, block.τ)
-        else
-            block_left = MondrianBlock(block.id * "L", block.X, block.N, min_samples_split, block.τ)
-            block_right = MondrianBlock(block.id * "R", x_new, [x_new_idx], min_samples_split, block.τ)
-        end
-        block = MondrianBlock(block.id, [block.X; new_x], push!(block.N, x_new_idx), true, split_axis, split_location, τ_parent + E, block_left, block_right, block.parent)
-    else
-        if block.split
-            if x_new[block.δ] <= block.ξ
-                block = extend_mondrian_block(block.L, x_new, block.τ, x_new_idx)
-            else
-                block = extend_mondrian_block(block.R, x_new, block.τ, x_new_idx)
-            end
-        else
-            block = block
-        end
-    end
-    return block
-end
+# function to extend the tree
+# We use a simplified version of the tree extension
+# since we only consider new Xs that are exact replications of one of the previous Xs (Bayesian Bootstrap)
+# Thus, we only add the new observations to all the nodes that they belong in, but do not introduce new nodes
+# We coudl perhaps split leaf nodes if they then reach more observations than min_sample_split (TO-DO)
+function extend!(tree::MondrianTree, x_new::Vector{Float64}, y_new::Float64)
+    n = length(tree.y)
 
-function extend(tree::MondrianTree, y_new::Float64, x_new::Vector{Float64})
+    # find the index of the x observation that matches the new observation
+    # we assume that at least one does, since we use a Bayesian Bootstrap to resample X
+    idx_x = findfirst(row -> row == x_new, eachrow(tree.X))
 
+    # add the new index to all nodes that contain the x observation
+    N_updated = [ifelse(idx_x in N_it, push!(N_it, n+1), N_it) for N_it in tree.N]
 
+    # return updated tree
+    tree = MondrianTree(tree.nodes, tree.is_leaf, N_updated, tree.δ, tree.ξ, tree.τ, tree.min_samples_split, [tree.X; x_new], [tree.y; y_new])
+    return tree
 end
 
 # predict function for MondrianTree objects
@@ -167,27 +144,3 @@ end
 
 
 
-
-# test
-function generate_data(n::Int, s::Real = 1, beta::Real = 1)
-    alpha = 0.0
-    gamma = 0.0
-    delta = fill(s, 10)
-    Sigma = [1.0 0.6; 0.6 1.0]
-
-    mvnorm = MvNormal(zeros(2), 0.6 * Sigma)
-    u = exp.(rand(mvnorm, n)')  # size (n, 2)
-
-    z = rand(Uniform(0, 1), n, 10)
-    x = gamma .+ z * delta .+ u[:, 1]
-    y = alpha .+ beta * x .+ u[:, 2]
-
-    return (y = y, x = x, z = z)
-end
-
-
-n = 100
-y, x, z = generate_data(n)
-tree = MondrianTree(y, x[:,:], 10)
-x_new = [10.0]
-res = predict(tree, x_new)
