@@ -1,7 +1,7 @@
 
 include("MondrianTrees.jl")
 
-using Base.Threads # for parallelisation
+#using Base.Threads # for parallelisation
 
 # Data generating function (DGP from Conley et. al., 2008)
 function generate_data(n::Int, s::Real = 1, beta::Real = 1)
@@ -11,7 +11,8 @@ function generate_data(n::Int, s::Real = 1, beta::Real = 1)
     Sigma = [1.0 0.6; 0.6 1.0]
 
     mvnorm = MvNormal(zeros(2), 0.6 * Sigma)
-    u = exp.(rand(mvnorm, n)')  # size (n, 2)
+    #u = exp.(rand(mvnorm, n)')
+    u = rand(mvnorm, n)'
 
     z = rand(Uniform(0, 1), n, 10)
     x = gamma .+ z * delta .+ u[:, 1]
@@ -43,6 +44,7 @@ function mp_sample(y::AbstractVector, x::AbstractVecOrMat, z::AbstractVecOrMat, 
         y_full[i] = rand(predict(tree, x_full[i, :]))
         extend!(tree, x_full[i, :], y_full[i])
     end
+
     return tsls(y_full, x_full, z_full)
 end
 
@@ -66,11 +68,6 @@ end
 n = 100
 y, x, z = generate_data(n)
 res = martingale_posterior(y, x, z)
-
-tree = MondrianTree(y, x[:, :], 5)
-pred = predict(tree, x[1, :])
-pred.prior.p
-pred.components[17]
 
 using StatsPlots
 density(res[2, :])
