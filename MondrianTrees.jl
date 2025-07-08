@@ -18,7 +18,7 @@ struct MondrianBlock
     parent::Union{String, Nothing} # id of parent node
 end
 
-struct MondrianTree
+mutable struct MondrianTree
     nodes::Vector{String} # Vector of all nodes
     is_leaf::Vector{Bool} # Boolean vector indicating which nodes are leaf nodes
     N::Vector{Vector{Int}} # Vector of Indices corresponding to each node
@@ -84,19 +84,17 @@ end
 # We use a simplified version of the tree extension
 # since we only consider new Xs that are exact replications of one of the previous Xs (Bayesian Bootstrap)
 # Thus, we only add the new observations to all the nodes that they belong in, but do not introduce new nodes
-# We coudl perhaps split leaf nodes if they then reach more observations than min_sample_split (TO-DO)
+# We could perhaps split leaf nodes if they then reach more observations than min_sample_split (TO-DO)
 function extend!(tree::MondrianTree, x_new::Vector{Float64}, y_new::Float64)
-    n = length(tree.y)
-
     # find the index of the x observation that matches the new observation
     # we assume that at least one does, since we use a Bayesian Bootstrap to resample X
     idx_x = findfirst(row -> row == x_new, eachrow(tree.X))
 
     # add the new index to all nodes that contain the x observation
-    N_updated = [ifelse(idx_x in N_it, push!(N_it, n+1), N_it) for N_it in tree.N]
+    N_updated = [ifelse(idx_x in N_it, push!(N_it, length(tree.y)+1), N_it) for N_it in tree.N]
 
     # return updated tree
-    tree = MondrianTree(tree.nodes, tree.is_leaf, N_updated, tree.δ, tree.ξ, tree.τ, tree.min_samples_split, [tree.X; x_new], [tree.y; y_new])
+    tree.N, tree.X, tree.y = (N_updated, [tree.X; x_new], [tree.y; y_new])
     return tree
 end
 
