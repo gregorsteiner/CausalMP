@@ -113,10 +113,14 @@ function predict(tree::MondrianTree, x_new::Vector{Float64})
         upper, lower = map(f -> map(f, eachcol(tree.X[tree.N[node_id], :])), (minimum, maximum))
         η_x = sum(max.(x_new - upper, zeros(d)) + max.(lower - x_new, zeros(d)))
         p_x = 1 - exp(-Δ * η_x)
+        if isnan(p_x) # if Δ = Inf but η = 0, we get p_x = NaN
+            p_x = 0.0 # We set it to 0 in that case
+        end
 
         y_node = tree.y[tree.N[node_id]] # get all the y-values in the node
         push!(m, mean(y_node))
-        push!(v, std(y_node; corrected = false))
+        y_std = ifelse(length(y_node) > 1, std(y_node; corrected = false), 1e-6)
+        push!(v, y_std)
 
         if tree.is_leaf[node_id]
             push!(w, (1 - p_x) * p_not_separated_yet)
@@ -133,11 +137,10 @@ function predict(tree::MondrianTree, x_new::Vector{Float64})
         end
     end
 
-    # Return the posterior predictive (mixture of Gaussians)
+    # Return the posterior predictive (a mixture of Gaussians)
     # Note that w may not exactly sum to 1 (I suppose this is due to rounding errors)
     # So we divide by its sum
     return MixtureModel(map((μ, σ) -> Normal(μ, σ), m, v), w ./ sum(w))
-    #return w
 end
 
 
