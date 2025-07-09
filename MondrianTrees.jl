@@ -94,7 +94,7 @@ function extend!(tree::MondrianTree, x_new::Vector{Float64}, y_new::Float64)
     N_updated = [ifelse(idx_x in N_it, push!(N_it, length(tree.y)+1), N_it) for N_it in tree.N]
 
     # return updated tree
-    tree.N, tree.X, tree.y = (N_updated, [tree.X; x_new], [tree.y; y_new])
+    tree.N, tree.X, tree.y = (N_updated, [tree.X; x_new'], [tree.y; y_new])
     return tree
 end
 
@@ -145,4 +145,24 @@ function predict(tree::MondrianTree, x_new::Vector{Float64})
 end
 
 
+# Create forest object
+# And extend the functions by iterating over every tree in the forest
+mutable struct MondrianForest
+    trees::Vector{MondrianTree} # a vector containing the individual trees
+    num_trees::Int # the number of trees in the forest
+end
 
+function MondrianForest(y::Vector{Float64}, X::Matrix{Float64}, min_samples_split::Int, num_trees::Int)
+    trees = [MondrianTree(y, X, min_samples_split) for _ in 1:num_trees]
+    MondrianForest(trees, num_trees)
+end
+
+function predict(forest::MondrianForest, x_new)
+    tree_preds = [predict(tree, x_new) for tree in forest.trees]
+    return MixtureModel(tree_preds)
+end
+
+function extend!(forest::MondrianForest, x_new::Vector{Float64}, y_new::Float64)
+    forest.trees = [extend!(tree, x_new, y_new) for tree in forest.trees]
+    return forest
+end

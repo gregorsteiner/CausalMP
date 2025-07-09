@@ -44,7 +44,6 @@ function mp_sample(y::AbstractVector, x::AbstractVecOrMat, z::AbstractVecOrMat, 
         y_full[i] = rand(predict(tree, x_full[i, :]))
         extend!(tree, x_full[i, :], y_full[i])
     end
-
     return tsls(y_full, x_full, z_full)
 end
 
@@ -65,9 +64,27 @@ end
 
 
 
-n = 100
-y, x, z = generate_data(n)
-res = martingale_posterior(y, x, z)
+n, N = (100, 500)
+y, x, z = generate_data(n, 1, 1)
+
+
+y_full, x_full, z_full = (Vector{eltype(y)}(undef, N), Matrix{eltype(x)}(undef, N, size(x, 2)), Matrix{eltype(z)}(undef, N, size(z, 2)))
+y_full[1:n], x_full[1:n, :], z_full[1:n,:] = (y, x, z)
+
+forest = MondrianForest(y, x[:, :], 5, 20)
+for i in (n+1):N
+    new_idx = sample(1:(i-1), 1)[1]
+    x_full[i, :], z_full[i, :] = (x_full[new_idx,:], z_full[new_idx,:])
+    y_full[i] = rand(predict(forest, x_full[i, :]))
+    extend!(forest, x_full[i, :], y_full[i])
+end
+
+
+(y[1], x[1, :])
+predict(forest, x[1, :]) |> rand
+
 
 using StatsPlots
-density(res[2, :])
+scatter(x_full[1:n], y_full[1:n], label = "Original")
+scatter!(x_full[(n+1):end], y_full[(n+1):end], label = "Imputed")
+
