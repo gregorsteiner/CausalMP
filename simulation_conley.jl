@@ -2,7 +2,8 @@
 
 include("MartingalePosterior.jl")
 
-#using Base.Threads # for parallelisation
+using Base.Threads # for parallelisation
+using ProgressMeter
 
 # Data generating function (DGP from Conley et. al., 2008)
 function generate_data(n::Int, s::Real = 1, beta::Real = 1)
@@ -28,7 +29,7 @@ function run_simulation(s::Float64; M::Int = 100, n::Int = 100, true_value::Floa
     coverage_flags = falses(M)
     interval_lengths = zeros(M)
 
-    for i in 1:M
+    @showprogress for i in 1:M
         # Simulate data
         y, x, z = generate_data(n, s, true_value)
 
@@ -38,8 +39,7 @@ function run_simulation(s::Float64; M::Int = 100, n::Int = 100, true_value::Floa
 
         # Compute posterior statistics
         post_median = median(post_sample)
-        lower = quantile(post_sample, 0.025)
-        upper = quantile(post_sample, 0.975)
+        lower, upper = quantile(post_sample, [0.025, 0.975])
 
         # Store metrics
         abs_errors[i] = abs(post_median - true_value)
@@ -52,7 +52,7 @@ function run_simulation(s::Float64; M::Int = 100, n::Int = 100, true_value::Floa
     coverage = mean(coverage_flags)
     median_interval_length = median(interval_lengths)
 
-    return mae, coverage, median_interval_length
+    return (MAE = mae, Coverage = coverage, MIL = median_interval_length)
 end
 
 ss = [0.5, 1.0, 1.5]
