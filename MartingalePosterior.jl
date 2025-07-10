@@ -16,12 +16,12 @@ function mp_sample(y::AbstractVector, x::AbstractVecOrMat, z::AbstractVecOrMat, 
     n = length(y)
     y_full, x_full, z_full = (Vector{eltype(y)}(undef, N), Matrix{eltype(x)}(undef, N, size(x, 2)), Matrix{eltype(z)}(undef, N, size(z, 2)))
     y_full[1:n], x_full[1:n, :], z_full[1:n,:] = (y, x, z)
-    forest = MondrianForest(y, x[:,:], 10, 5)
+    forest = MondrianForest(y, [x z], 10, 1)
     for i in (n+1):N
         new_idx = sample(1:(i-1), 1)[1]
         x_full[i, :], z_full[i, :] = (x_full[new_idx,:], z_full[new_idx,:])
-        y_full[i] = rand(predict(forest, x_full[i, :]))
-        extend!(forest, x_full[i, :], y_full[i])
+        y_full[i] = rand(predict(forest, [x_full[i, :]; z_full[i, :]]))
+        extend!(forest, [x_full[i, :]; z_full[i, :]], y_full[i])
     end
     return tsls(y_full, x_full, z_full)
 end
