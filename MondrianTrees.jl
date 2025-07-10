@@ -89,12 +89,17 @@ function extend!(tree::MondrianTree, x_new::Vector{Float64}, y_new::Float64)
     # find the index of the x observation that matches the new observation
     # we assume that at least one does, since we use a Bayesian Bootstrap to resample X
     idx_x = findfirst(row -> row == x_new, eachrow(tree.X))
+    new_idx = length(tree.y) + 1
 
     # add the new index to all nodes that contain the x observation
-    N_updated = [ifelse(idx_x in N_it, push!(N_it, length(tree.y)+1), N_it) for N_it in tree.N]
+    for i in eachindex(tree.N)
+        if idx_x in tree.N[i]
+            push!(tree.N[i], new_idx)
+        end
+    end
 
-    # return updated tree
-    tree.N, tree.X, tree.y = (N_updated, [tree.X; x_new'], [tree.y; y_new])
+    # Also add new observations to the data fields and return updated tree
+    tree.X, tree.y = ([tree.X; x_new'], [tree.y; y_new])
     return tree
 end
 
