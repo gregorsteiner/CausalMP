@@ -28,8 +28,9 @@ res_givbma = givbma(y, x, z)
 res_mp = martingale_posterior(y, x, z; criterion = sisvive, B = 200)
 
 
-p = plot(rbw(res_givbma), label = "gIVBMA", xlabel = "β", ylabel = "Posterior Density")
-density!(res_mp[2, :], label = "MP sisVIVE (MF)")
+p = plot(rbw(res_givbma), label = "gIVBMA", linewidth = 2,
+         xlabel = "β", ylabel = "Posterior Density")
+density!(res_mp[2, :], label = "MP sisVIVE (MF)", linewidth = 2)
 vline!([1.0], linestyle = :dash, label = "True β")
 savefig(p, "Invalid_Instruments_Example.pdf")
 
