@@ -18,5 +18,5 @@ plt = density(
     mp_fit[2, :],
     linewidth = 2,
     label = "", xlabel = "Effect of institutions on output", ylabel = "Posterior Density")
-xlims!(0.25, 2.5)
+xlims!(0.0, 2.2)
 savefig(plt, "AJR_Results.pdf")
