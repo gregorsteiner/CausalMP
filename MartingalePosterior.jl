@@ -30,11 +30,14 @@ function sisvive(y::AbstractVector, x::AbstractVecOrMat, z::AbstractVecOrMat)
 end
 
 # auxiliary function that returns the indices for k-fold cross-validation
-function kfold_indices(n::Int, k::Int)
+function kfold_indices(n::Int, k::Int; shuffle::Bool = true)
     @assert k > 1 "Number of folds k must be at least 2."
     @assert n >= k "Number of samples n must be at least equal to k."
 
     indices = collect(1:n)
+    if shuffle
+        shuffle!(indices)
+    end
     base_size = div(n, k)
     remainder = rem(n, k)
 
