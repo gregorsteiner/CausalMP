@@ -1,6 +1,7 @@
 
 include("MondrianTrees.jl")
 using RCall
+using InvertedIndices
 
 # Two-Stage Least Squares (TSLS)
 add_intercept(x) = [ones(eltype(x), size(x, 1)) x] # auxiliary function to add column of ones to matrix x
@@ -28,33 +29,100 @@ function sisvive(y::AbstractVector, x::AbstractVecOrMat, z::AbstractVecOrMat)
     return [0.0; res[:beta]] # add 0.0 since sisvive does not return an intercept
 end
 
+# auxiliary function that returns the indices for k-fold cross-validation
+function kfold_indices(n::Int, k::Int)
+    @assert k > 1 "Number of folds k must be at least 2."
+    @assert n >= k "Number of samples n must be at least equal to k."
+
+    indices = collect(1:n)
+    base_size = div(n, k)
+    remainder = rem(n, k)
+
+    folds = Vector{Vector{Int}}(undef, k)
+    start = 1
+    for i in 1:k
+        fold_size = base_size + (i <= remainder ? 1 : 0)
+        folds[i] = indices[start:start + fold_size - 1]
+        start += fold_size
+    end
+
+    return folds
+end
+
+# DDML IV criterion function
+# This implements a double/debiased machine learning approach for IV estimation in a partially linear model
+# see e.g. Chernozhukov et. al. (2024)
+function ddml_iv(y::AbstractVector, x::AbstractVecOrMat, z::AbstractVecOrMat, w::AbstractVecOrMat; k::Int = 2, min_samples_split::Int = 10, num_trees::Int = 5)
+ 
+    # estimate partialled-out residuals in a cross-fitted way
+    y_tilde, x_tilde, z_tilde = (similar(y), similar(x), similar(z))
+    folds = kfold_indices(length(y), k)
+    for fold in folds
+        # fit on all observations except the ones in fold
+        l_fit = MondrianForest(y[Not(fold)], w[Not(fold), :], min_samples_split, num_trees)
+        r_fit = MondrianForest(x[Not(fold), 1], w[Not(fold), :], min_samples_split, num_trees)
+        m_fit = MondrianForest(z[Not(fold), 1], w[Not(fold), :], min_samples_split, num_trees)
+
+        # predict the residuals for the observations in fold
+        for idx in fold
+            y_tilde[idx], x_tilde[idx, 1], z_tilde[idx, 1] = map(fit -> mean(predict(fit, w[idx, :])), (l_fit, r_fit, m_fit))
+        end
+    end
+
+    # compute the estimate on the partialled-out data
+    return tsls(y_tilde, x_tilde, z_tilde)
+end
 
 # return a single sample from the martingale posterior
-function mp_sample(y::AbstractVector, x::AbstractVecOrMat, z::AbstractVecOrMat, criterion::Function, N::Int, num_trees::Int)
+function mp_sample(
+    y::AbstractVector, x::AbstractVecOrMat, z::AbstractVecOrMat,
+    criterion::Function, N::Int, num_trees::Int; W::Union{Nothing, AbstractVecOrMat}=nothing
+)
     n = length(y)
-    y_full, x_full, z_full = (Vector{eltype(y)}(undef, N), Matrix{eltype(x)}(undef, N, size(x, 2)), Matrix{eltype(z)}(undef, N, size(z, 2)))
-    y_full[1:n], x_full[1:n, :], z_full[1:n,:] = (y, x, z)
-    forest = MondrianForest(y, [x z], 10, num_trees)
+    y_full = Vector{eltype(y)}(undef, N)
+    x_full = Matrix{eltype(x)}(undef, N, size(x, 2))
+    z_full = Matrix{eltype(z)}(undef, N, size(z, 2))
+    y_full[1:n], x_full[1:n, :], z_full[1:n, :] = y, x, z
+
+    W_full = isnothing(W) ? nothing : Matrix{eltype(W)}(undef, N, size(W, 2))
+    if W_full !== nothing
+        W_full[1:n, :] = W
+    end
+
+    forest_input = isnothing(W) ? [x z] : [x z W]
+    forest = MondrianForest(y, forest_input, 10, num_trees)
+
     for i in (n+1):N
         new_idx = sample(1:(i-1), 1)[1]
-        x_full[i, :], z_full[i, :] = (x_full[new_idx,:], z_full[new_idx,:])
-        y_full[i] = rand(predict(forest, [x_full[i, :]; z_full[i, :]]))
-        extend!(forest, [x_full[i, :]; z_full[i, :]], y_full[i])
+        x_full[i, :], z_full[i, :] = x_full[new_idx, :], z_full[new_idx, :]
+        if W_full !== nothing
+            W_full[i, :] = W_full[new_idx, :]
+        end
+
+        input_vec = isnothing(W) ? [x_full[i, :]; z_full[i, :]] : [x_full[i, :]; z_full[i, :]; W_full[i, :]]
+        y_full[i] = rand(predict(forest, input_vec))
+        extend!(forest, input_vec, y_full[i])
     end
-    return criterion(y_full, x_full, z_full)
+
+    return isnothing(W) ? criterion(y_full, x_full, z_full) : criterion(y_full, x_full, z_full, W_full)
 end
+
+
+
 
 # implement the martingale posterior approach
 # No need to add an intercept in x and z (will be done automatically)
 function martingale_posterior(
     y::AbstractVector, x::AbstractVecOrMat, z::AbstractVecOrMat;
+    W::Union{Nothing, AbstractVecOrMat}=nothing,
     criterion::Function = tsls,
-    N::Int = 5*length(y), B::Int = 100, num_trees::Int = 1
-)  
-    results = Matrix{Float64}(undef, size(x, 2) + 1, B) # each column is a posterior sample
-    #Threads.@threads for i in 1:B
+    N::Int = 5 * length(y), B::Int = 100, num_trees::Int = 1
+)
+    k = size(x, 2)
+    results = Matrix{Float64}(undef, k + 1, B)
+
     for i in 1:B
-        results[:, i] = mp_sample(y, x, z, criterion, N, num_trees)
+        results[:, i] = mp_sample(y, x, z, criterion, N, num_trees; W = W)
     end
     return results
 end
