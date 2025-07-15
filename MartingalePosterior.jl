@@ -52,7 +52,7 @@ end
 # DDML IV criterion function
 # This implements a double/debiased machine learning approach for IV estimation in a partially linear model
 # see e.g. Chernozhukov et. al. (2024)
-function ddml_iv(y::AbstractVector, x::AbstractVecOrMat, z::AbstractVecOrMat, w::AbstractVecOrMat; k::Int = 2, min_samples_split::Int = 10, num_trees::Int = 5)
+function ddml_iv(y::AbstractVector, x::AbstractVecOrMat, z::AbstractVecOrMat, w::AbstractVecOrMat; k::Int = 5, min_samples_split::Int = 10, num_trees::Int = 5)
  
     # estimate partialled-out residuals in a cross-fitted way
     y_tilde, x_tilde, z_tilde = (similar(y), similar(x), similar(z))
