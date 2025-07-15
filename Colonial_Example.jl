@@ -18,5 +18,5 @@ plt = density(
     mp_fit[2, :],
     linewidth = 2,
     label = "", xlabel = "Effect of institutions on output", ylabel = "Posterior Density")
-xlims!(0.25, 2)
+xlims!(0.25, 2.5)
 savefig(plt, "Colonial_Example_Results.pdf")
