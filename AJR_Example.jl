@@ -5,8 +5,8 @@ include("MartingalePosterior.jl")
 
 
 # load data
-d = CSV.read("Colonial_Data.csv", DataFrame)
-y, x, z, W = (d.logpgp95, d.avexpr, d.logem4, Matrix(d[:, ["lat_abst", "africa", "asia", "rich4"]]))
+d = CSV.read("AJR_Data.csv", DataFrame)
+y, x, z, W = (d.GDP, d.Exprop, d.logMort, Matrix(d[:, ["Latitude", "Latitude2", "Africa", "Asia", "Namer", "Samer"]]))
 
 # run analysis
 Random.seed!(42)
@@ -19,4 +19,4 @@ plt = density(
     linewidth = 2,
     label = "", xlabel = "Effect of institutions on output", ylabel = "Posterior Density")
 xlims!(0.25, 2.5)
-savefig(plt, "Colonial_Example_Results.pdf")
+savefig(plt, "AJR_Results.pdf")
