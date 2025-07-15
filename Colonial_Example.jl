@@ -14,6 +14,9 @@ mp_fit = martingale_posterior(y, x, z; W = W, criterion = ddml_iv, B = 500)
 
 
 using StatsPlots
-plt = density(mp_fit[2, :], label = "MP DDML-IV", xlabel = "Effect of institutions on output", ylabel = "Posterior Density")
+plt = density(
+    mp_fit[2, :],
+    linewidth = 2,
+    label = "", xlabel = "Effect of institutions on output", ylabel = "Posterior Density")
 xlims!(0.25, 2)
 savefig(plt, "Colonial_Example_Results.pdf")
