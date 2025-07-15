@@ -33,9 +33,9 @@ end
 # Construct a nested Mondrian block object
 function MondrianBlock(id::String, X::Matrix{Float64}, N::Vector{Int}, min_samples_split::Int, creation_time::Float64)
     n, d = size(X)
-    if n >= min_samples_split
-        lower, upper = map(f -> map(f, eachcol(X)), (minimum, maximum))
-        size_cell = sum(upper .- lower)
+    lower, upper = map(f -> map(f, eachcol(X)), (minimum, maximum))
+    size_cell = sum(upper .- lower)
+    if n >= min_samples_split && size_cell > 0.0
         E = rand(Exponential(1 / size_cell))
         split_probabilities = collect(upper .- lower) ./ size_cell
         split_axis = rand(DiscreteNonParametric(1:d, split_probabilities))
@@ -144,6 +144,11 @@ function predict(tree::MondrianTree, x_new::Vector{Float64})
             end
         end
     end
+
+    # Sometimes w does not exaclty sum to 1 (I assume this is due to small precision errors accumulating)
+    # In that case, we divide by its sum
+    w = clamp.(w, 0.0, 1.0)
+    w ./= sum(w)
 
     # Return the posterior predictive (a mixture of Gaussians)
     return MixtureModel(map((μ, σ) -> Normal(μ, σ), m, v), w)
