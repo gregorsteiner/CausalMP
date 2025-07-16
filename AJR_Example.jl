@@ -10,13 +10,14 @@ y, x, z, W = (d.GDP, d.Exprop, d.logMort, Matrix(d[:, ["Latitude", "Latitude2", 
 
 # run analysis
 Random.seed!(42)
-mp_fit = martingale_posterior(y, x, z; W = W, criterion = ddml_iv, B = 500)
+mp_fit = martingale_posterior(y, x, z; W = W, criterion = ddml_iv, N = 200, B = 500, num_trees = 5)
 
-
+# plot results
 using StatsPlots
 plt = density(
-    mp_fit[2, :],
+    mp_fit,
     linewidth = 2,
-    label = "", xlabel = "Effect of institutions on output", ylabel = "Posterior Density")
-xlims!(0.0, 2.2)
+    label = "", xlabel = "Effect of institutions on output", ylabel = "Posterior Density"
+)
+xlims!(-3.0, 5.0)
 savefig(plt, "AJR_Results.pdf")

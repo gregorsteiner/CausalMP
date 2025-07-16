@@ -7,8 +7,12 @@ using InvertedIndices
 add_intercept(x) = [ones(eltype(x), size(x, 1)) x] # auxiliary function to add column of ones to matrix x
 project(X) = X * inv(X'X) * X' # projection onto the space spanned by X
 
-function tsls(y::AbstractVector, x::AbstractVecOrMat, z::AbstractVecOrMat)
-    X, Z = map(add_intercept, (x, z))
+function tsls(y::AbstractVector, x::AbstractVecOrMat, z::AbstractVecOrMat; intercept::Bool = true)
+    if intercept
+        X, Z = map(add_intercept, (x, z))
+    else
+        X, Z = x, z
+    end
     P_Z = project(Z)
     β_hat = inv(X' * P_Z * X) * X' * P_Z * y
     return β_hat
@@ -54,11 +58,11 @@ end
 
 # DDML IV criterion function
 # This implements a double/debiased machine learning approach for IV estimation in a partially linear model
-# see e.g. Chernozhukov et. al. (2024)
-function ddml_iv(y::AbstractVector, x::AbstractVecOrMat, z::AbstractVecOrMat, w::AbstractVecOrMat; k::Int = 5, min_samples_split::Int = 10, num_trees::Int = 5)
+# see e.g. Chernozhukov et. al. (2018, 2024)
+function ddml_iv_single_split(y::AbstractVector, x::AbstractVecOrMat, z::AbstractVecOrMat, w::AbstractVecOrMat; k::Int = 5, min_samples_split::Int = 10, num_trees::Int = 5)
  
     # estimate partialled-out residuals in a cross-fitted way
-    y_tilde, x_tilde, z_tilde = (similar(y), similar(x), similar(z))
+    l_hat, r_hat, m_hat = (similar(y), similar(x), similar(z))
     folds = kfold_indices(length(y), k)
     for fold in folds
         # fit on all observations except the ones in fold
@@ -66,14 +70,24 @@ function ddml_iv(y::AbstractVector, x::AbstractVecOrMat, z::AbstractVecOrMat, w:
         r_fit = MondrianForest(x[Not(fold), 1], w[Not(fold), :], min_samples_split, num_trees)
         m_fit = MondrianForest(z[Not(fold), 1], w[Not(fold), :], min_samples_split, num_trees)
 
-        # predict the residuals for the observations in fold
+        # predict the conditional mean functions for the observations in fold
+        # the code below currently assumes that x and z are only one-dimensional
+        # it might be useful to generalise this later
         for idx in fold
-            y_tilde[idx], x_tilde[idx, 1], z_tilde[idx, 1] = map(fit -> mean(predict(fit, w[idx, :])), (l_fit, r_fit, m_fit))
+            l_hat[idx], r_hat[idx, 1], m_hat[idx, 1] = map(fit -> mean(predict(fit, w[idx, :])), (l_fit, r_fit, m_fit))
         end
     end
 
-    # compute the estimate on the partialled-out data
-    return tsls(y_tilde, x_tilde, z_tilde)
+    # compute partialled-out residuals
+    y_tilde, x_tilde, z_tilde = (y - l_hat, x - r_hat, z - m_hat)
+
+    # return the estimate on the partialled-out data
+    return tsls(y_tilde, x_tilde, z_tilde; intercept = false)[1]
+end
+
+function ddml_iv(y::AbstractVector, x::AbstractVecOrMat, z::AbstractVecOrMat, w::AbstractVecOrMat; num_split::Int = 10, k::Int = 5, min_samples_split::Int = 10, num_trees::Int = 5)
+    results = map(_ -> ddml_iv_single_split(y, x, z, w; k = k, min_samples_split = min_samples_split, num_trees = num_trees), 1:num_split)
+    return median(results)
 end
 
 # return a single sample from the martingale posterior
@@ -92,7 +106,7 @@ function mp_sample(
         W_full[1:n, :] = W
     end
 
-    forest_input = isnothing(W) ? [x z] : [x z W]
+    forest_input = isnothing(W) ? x[:,:] : [x W]
     forest = MondrianForest(y, forest_input, 10, num_trees)
 
     for i in (n+1):N
@@ -102,7 +116,7 @@ function mp_sample(
             W_full[i, :] = W_full[new_idx, :]
         end
 
-        input_vec = isnothing(W) ? [x_full[i, :]; z_full[i, :]] : [x_full[i, :]; z_full[i, :]; W_full[i, :]]
+        input_vec = isnothing(W) ? x_full[i, :] : [x_full[i, :]; W_full[i, :]]
         y_full[i] = rand(predict(forest, input_vec))
         extend!(forest, input_vec, y_full[i])
     end
@@ -121,11 +135,9 @@ function martingale_posterior(
     criterion::Function = tsls,
     N::Int = 5 * length(y), B::Int = 100, num_trees::Int = 1
 )
-    k = size(x, 2)
-    results = Matrix{Float64}(undef, k + 1, B)
-
+    results = Vector{Float64}(undef, B)
     for i in 1:B
-        results[:, i] = mp_sample(y, x, z, criterion, N, num_trees; W = W)
+        results[i] = mp_sample(y, x, z, criterion, N, num_trees; W = W)
     end
     return results
 end
