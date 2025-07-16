@@ -121,7 +121,8 @@ function mp_sample(
         extend!(forest, input_vec, y_full[i])
     end
 
-    return isnothing(W) ? criterion(y_full, x_full, z_full) : criterion(y_full, x_full, z_full, W_full)
+    result = isnothing(W) ? criterion(y_full, x_full, z_full) : criterion(y_full, x_full, z_full, W_full)
+    return result
 end
 
 
@@ -135,9 +136,6 @@ function martingale_posterior(
     criterion::Function = tsls,
     N::Int = 5 * length(y), B::Int = 100, num_trees::Int = 1
 )
-    results = Vector{Float64}(undef, B)
-    for i in 1:B
-        results[i] = mp_sample(y, x, z, criterion, N, num_trees; W = W)
-    end
+    results = map(_ -> mp_sample(y, x, z, criterion, N, num_trees; W = W), 1:B)
     return results
 end
