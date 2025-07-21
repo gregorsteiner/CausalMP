@@ -19,4 +19,5 @@ plt = density(
     linewidth = 2,
     label = "", xlabel = "Effect of institutions on output", ylabel = "Posterior Density"
 )
+xlims!(-2, 4)
 savefig(plt, "AJR_Results.pdf")
