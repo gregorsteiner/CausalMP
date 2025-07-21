@@ -82,6 +82,24 @@ function MondrianTree(y::Vector{Float64}, X::Matrix{Float64}, min_samples_split:
 end
 
 
+# auxiliary function to shift the ids when a new node is inserted
+function update_ids!(block::MondrianBlock, new_id::String, parent_id::Union{String, Nothing}=nothing)
+    # Update the ID and parent
+    block.id = new_id
+    block.parent = parent_id
+
+    # Recursively update children if they exist
+    if block.L !== nothing
+        update_ids!(block.L, new_id * "L", new_id)
+    end
+    if block.R !== nothing
+        update_ids!(block.R, new_id * "R", new_id)
+    end
+
+    return block
+end
+
+# extend an existing mondrian block by potentially inserting a new node
 function extend_mondrian_block(block::MondrianBlock, x_new::Vector{Float64}, τ_parent::Float64, x_new_idx::Int, min_samples_split::Int)
     n, d = size(block.X)
     lower, upper = map(f -> map(f, eachcol(block.X)), (minimum, maximum))
@@ -99,14 +117,16 @@ function extend_mondrian_block(block::MondrianBlock, x_new::Vector{Float64}, τ_
 
         if x_new[split_axis]  <= split_location
             block_left = MondrianBlock(block.id * "L", reshape(x_new, 1, :), [x_new_idx], min_samples_split, block.τ)
-            block_right = MondrianBlock(block.id * "R", block.X, block.N, min_samples_split, block.τ)
+            block_right = deepcopy(block)
+            update_ids!(block_right, block.id * "R", block.id)
         else
-            block_left = MondrianBlock(block.id * "L", block.X, block.N, min_samples_split, block.τ)
+            block_left = deepcopy(block)
+            update_ids!(block_left, block.id * "L", block.id)
             block_right = MondrianBlock(block.id * "R", reshape(x_new, 1, :), [x_new_idx], min_samples_split, block.τ)
         end
-        block = MondrianBlock(block.id, [block.X; new_x'], push!(block.N, x_new_idx), true, split_axis, split_location, τ_parent + E, block_left, block_right, block.parent)
+        block = MondrianBlock(block.id, [block.X; x_new'], push!(block.N, x_new_idx), true, split_axis, split_location, τ_parent + E, block_left, block_right, block.parent)
     else
-        block.X = [block.X; new_x']
+        block.X = [block.X; x_new']
         push!(block.N, x_new_idx)
         if block.split
             if x_new[block.δ] <= block.ξ
