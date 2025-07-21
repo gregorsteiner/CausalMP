@@ -78,7 +78,8 @@ function run_simulation(s::Float64; M::Int = 100, n::Int = 100, B::Int = 100, tr
         y, x, z = generate_data(n, s, true_value)
 
         # Get posterior samples
-        mp = martingale_posterior(y, x, z; B = B)[2, :]
+        mp_fit = martingale_posterior(y, x, z; B = B)
+        mp = getindex.(mp_fit, 2)
         iv = iv_rossi(y, x, z; B = B)
         ivdp = iv_conley(y, x, z; B = B)
 
