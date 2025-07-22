@@ -106,19 +106,26 @@ function mp_sample(
         W_full[1:n, :] = W
     end
 
-    forest_input = isnothing(W) ? x[:,:] : [x W]
-    forest = MondrianForest(y, forest_input, 10, num_trees)
+    forest_input_x = isnothing(W) ? z[:,:] : [z W]
+    forest_x = MondrianForest(x[:, 1], forest_input_x, 10, num_trees)
+
+    forest_input_y = isnothing(W) ? x[:,:] : [x W]
+    forest_y = MondrianForest(y, forest_input_y, 10, num_trees)
 
     for i in (n+1):N
         new_idx = sample(1:(i-1), 1)[1]
-        x_full[i, :], z_full[i, :] = x_full[new_idx, :], z_full[new_idx, :]
+        z_full[i, :] = z_full[new_idx, :]
         if W_full !== nothing
             W_full[i, :] = W_full[new_idx, :]
         end
 
-        input_vec = isnothing(W) ? x_full[i, :] : [x_full[i, :]; W_full[i, :]]
-        y_full[i] = rand(predict(forest, input_vec))
-        extend!(forest, input_vec, y_full[i])
+        input_vec_x = isnothing(W) ? z_full[i, :] : [z_full[i, :]; W_full[i, :]]
+        x_full[i, :] = [rand(predict(forest_x, input_vec_x))]
+        extend!(forest_x, input_vec_x, x_full[i])
+
+        input_vec_y = isnothing(W) ? x_full[i, :] : [x_full[i, :]; W_full[i, :]]
+        y_full[i] = rand(predict(forest_y, input_vec_y))
+        extend!(forest_y, input_vec_y, y_full[i])
     end
 
     result = isnothing(W) ? criterion(y_full, x_full, z_full) : criterion(y_full, x_full, z_full, W_full)
