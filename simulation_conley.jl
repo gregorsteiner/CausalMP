@@ -25,7 +25,7 @@ function generate_data(n::Int, s::Real = 1, beta::Real = 1)
     return (y = y, x = x, z = z)
 end
 
-# Implement the method of Conley at. al. (2008)
+# Implement the method of Conley et. al. (2008)
 function iv_conley(y, x, z; B = 100)
     @rput y x z B
     R"""
