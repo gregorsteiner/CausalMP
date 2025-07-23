@@ -22,6 +22,20 @@ function generate_data(s; n = 100, τ = 1, p = 10, c = 0.6)
     return (y = y, x = x, Z = Z)
 end
 
+# Bayesian IV with DP errors (see Conley et. al, 2008)
+function iv_conley(y, x, z; B = 100)
+    @rput y x z B
+    R"""
+    fit = bayesm::rivDP(
+        list(y = y, x = x, z = z),
+        Mcmc = list(R = 2*B, keep = 2, nprint = 0),
+    )
+    betas = as.numeric(fit$betadraw)
+    """
+    @rget betas
+    return betas
+end
+
 
 # function that computes the performance criteria
 function performance_measures(posterior_sample, true_value)
@@ -35,9 +49,9 @@ function performance_measures(posterior_sample, true_value)
 end
 
 # Wrapper function that runs the simulation
-function run_simulation(s::Int; M::Int = 5, n::Int = 100, N::Int = 5*n, B::Int = 100, true_value::Float64 = 1.0)
+function run_simulation(s::Int; M::Int = 100, n::Int = 100, N::Int = 5*n, B::Int = 100, true_value::Float64 = 1.0)
     # Preallocate arrays
-    methods = ["MP sisVIVE", "gIVBMA"]
+    methods = ["MP sisVIVE", "gIVBMA", "Bayes IV (DP)"]
     abs_errors = zeros(length(methods), M)
     coverage_flags = falses(length(methods), M)
     interval_lengths = zeros(length(methods), M)
@@ -54,10 +68,12 @@ function run_simulation(s::Int; M::Int = 5, n::Int = 100, N::Int = 5*n, B::Int =
         )
         mp = getindex.(mp_fit, 2)
         givbma_fit = givbma(y, x, z; iter = 5000)
+        ivdp = iv_conley(y, x, z; B = 5000)
 
         # compute performance criteria
         abs_errors[1, i], coverage_flags[1, i], interval_lengths[1, i] = performance_measures(mp, true_value)
         abs_errors[2, i], coverage_flags[2, i], interval_lengths[2, i] = performance_measures(rbw(givbma_fit)[1], true_value)
+        abs_errors[3, i], coverage_flags[3, i], interval_lengths[3, i] = performance_measures(ivdp, true_value)
     end
 
     # Compute performance measures
@@ -65,7 +81,7 @@ function run_simulation(s::Int; M::Int = 5, n::Int = 100, N::Int = 5*n, B::Int =
     coverage = mean(coverage_flags; dims = 2)
     median_interval_length = mean(interval_lengths; dims = 2)
 
-    return (MAE = mae, Coverage = coverage, MIL = median_interval_length)
+    return (MAE = mae, Coverage = coverage, MIL = median_interval_length, s = s, methods = methods)
 end
 
 # Run simulation

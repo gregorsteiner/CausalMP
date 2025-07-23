@@ -50,4 +50,5 @@ savefig(plot_conley, "Results_Conley.pdf")
 
 ## Plot results of the invalid instrument simulation
 data_invalid = load("Results_Invalid.jld2")
-plot_invalid = plot_simulation_results(data_invalid, ["MP sisVIVE", "gIVBMA"])
+plot_invalid = plot_simulation_results(data_invalid, ["MP sisVIVE", "gIVBMA", "Bayes IV (DP)"])
+savefig(plot_invalid, "Results_Invalid.pdf")
