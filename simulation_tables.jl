@@ -34,7 +34,7 @@ function generate_latex_table_from_dict(data::Dict{String, Any})
     # Begin LaTeX
     latex = "\\begin{tabular}{l" * "c"^(n_metrics * length(keys_sorted)) * "}\n"
     latex *= "\\toprule\n"
-    latex *= " & " * join(["\\multicolumn{$n_metrics}{c}{$k}" for k in keys_sorted], " & ") * " \\\\\n"
+    latex *= " & " * join(["\\multicolumn{$n_metrics}{c}{\$ $k \$}" for k in keys_sorted], " & ") * " \\\\\n"
 
     # Metric headers
     latex *= "Method"
