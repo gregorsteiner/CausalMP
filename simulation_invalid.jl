@@ -13,7 +13,7 @@ function generate_data(s; n = 100, τ = 1, p = 5, c = 0.6)
     Z = rand(MvNormal(zeros(p), I), n)'
 
     α = γ = 1
-    δ = ones(p) .* 5/32 # chosen s.t. the first-stage R^2 is approximately 0.2
+    δ = ones(p) .* 7/32 # chosen s.t. the first-stage R^2 is approximately 0.2
     β = [ones(s); zeros(p-s)]
 
     u = rand(MvTDist(2, [0.0, 0.0], [1.0 c; c 1.0]), n)'
@@ -79,8 +79,8 @@ function run_simulation(s::Int; M::Int = 100, n::Int = 100, N::Int = 5*n, B::Int
     coverage_flags = falses(length(methods), M)
     interval_lengths = zeros(length(methods), M)
 
-    #Threads.@threads for i in 1:M
-    @showprogress for i in 1:M
+    @showprogress Threads.@threads for i in 1:M
+    #@showprogress for i in 1:M
         # Simulate data
         y, x, z = generate_data(s; n = n, τ = true_value)
 
@@ -108,9 +108,9 @@ function run_simulation(s::Int; M::Int = 100, n::Int = 100, N::Int = 5*n, B::Int
     # Compute performance measures
     mae = median(abs_errors; dims = 2)
     coverage = mean(coverage_flags; dims = 2)
-    mean_interval_length = mean(interval_lengths; dims = 2)
+    median_interval_length = median(interval_lengths; dims = 2)
 
-    return (MAE = mae, Coverage = coverage, MIL = mean_interval_length, s = s, methods = methods)
+    return (MAE = mae, Coverage = coverage, MIL = median_interval_length, s = s, methods = methods)
 end
 
 # Run simulation
@@ -118,4 +118,3 @@ ss = [2, 4] # 2 scenarios: 2 or 4 of the 5 available instruments are invalid
 result = map(run_simulation, ss)
 print(result)
 save("Results_Invalid.jld2", Dict("s=2" => result[1], "s=4" => result[2]))
-
