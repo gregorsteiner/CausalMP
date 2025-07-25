@@ -3,6 +3,7 @@ include("MondrianTrees.jl")
 include("estimators.jl")
 
 using InvertedIndices
+using ThreadsX
 
 
 # auxiliary function that returns the indices for k-fold cross-validation
@@ -71,16 +72,18 @@ function mp_sample(
 end
 
 
-
-
 # implement the martingale posterior approach
 # No need to add an intercept in x and z (will be done automatically)
 function martingale_posterior(
     y::AbstractVector, x::AbstractVecOrMat, z::AbstractVecOrMat;
-    W::Union{Nothing, AbstractVecOrMat}=nothing,
-    criterion::Function = tsls,
+    W::Union{Nothing, AbstractVecOrMat} = nothing,
+    criterion::Function = tsls, parallel::Bool = false,
     N::Int = 5 * length(y), B::Int = 100, num_trees::Int = 1
 )
-    results = map(_ -> mp_sample(y, x, z, criterion, N, num_trees; W = W), 1:B)
+    if parallel
+        results = ThreadsX.map(_ -> mp_sample(y, x, z, criterion, N, num_trees; W = W), 1:B)
+    else
+        results = map(_ -> mp_sample(y, x, z, criterion, N, num_trees; W = W), 1:B)
+    end
     return results
 end

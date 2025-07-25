@@ -5,6 +5,20 @@ using RCall
 add_intercept(x) = [ones(eltype(x), size(x, 1)) x] # auxiliary function to add column of ones to matrix x
 project(X) = X * inv(X'X) * X' # projection onto the space spanned by X
 
+# OLS
+function ols(y::AbstractVector, x::AbstractVecOrMat, W::AbstractVecOrMat; intercept::Bool = true)
+    U = [x W]
+    if intercept
+        U = add_intercept(U)
+    end
+    β_hat = inv(U'U) * U'y
+    return β_hat
+end
+
+function ols(y::AbstractVector, x::AbstractVecOrMat; intercept::Bool = true)
+    ols(y, x, Matrix{eltype(x)}(undef, size(x, 1), 0); intercept = intercept)
+end
+
 # Two-Stage Least Squares (TSLS)
 function tsls(y::AbstractVector, x::AbstractVecOrMat, z::AbstractVecOrMat, W::AbstractVecOrMat; intercept::Bool = true, ci::Bool = false, level::Float64 = 0.05)
     U, V = ([x W], [z W])
@@ -48,33 +62,47 @@ end
 # DDML IV
 # This implements a double/debiased machine learning approach for IV estimation in a partially linear model
 # see e.g. Chernozhukov et. al. (2018, 2024)
-function ddml_iv_single_split(y::AbstractVector, x::AbstractVecOrMat, z::AbstractVecOrMat, w::AbstractVecOrMat; k::Int = 5, min_samples_split::Int = 10, num_trees::Int = 5)
- 
+function ddml_single_split(y::AbstractVector, x::AbstractVecOrMat, z::AbstractVecOrMat, w::AbstractVecOrMat; iv::Bool = true, k::Int = 5, min_samples_split::Int = 10, num_trees::Int = 5)
     # estimate partialled-out residuals in a cross-fitted way
-    l_hat, r_hat, m_hat = (similar(y), similar(x), similar(z))
+    l_hat, r_hat = (similar(y), similar(x))
+    if iv
+        m_hat = similar(z)
+    end
     folds = kfold_indices(length(y), k)
     for fold in folds
         # fit on all observations except the ones in fold
         l_fit = MondrianForest(y[Not(fold)], w[Not(fold), :], min_samples_split, num_trees)
         r_fit = MondrianForest(x[Not(fold), 1], w[Not(fold), :], min_samples_split, num_trees)
-        m_fit = MondrianForest(z[Not(fold), 1], w[Not(fold), :], min_samples_split, num_trees)
+        if iv
+            m_fit = MondrianForest(z[Not(fold), 1], w[Not(fold), :], min_samples_split, num_trees)
+        end
 
         # predict the conditional mean functions for the observations in fold
         # the code below currently assumes that x and z are only one-dimensional
         # it might be useful to generalise this later
         for idx in fold
-            l_hat[idx], r_hat[idx, 1], m_hat[idx, 1] = map(fit -> mean(predict(fit, w[idx, :])), (l_fit, r_fit, m_fit))
+            if iv
+                l_hat[idx], r_hat[idx, 1], m_hat[idx, 1] = map(fit -> mean(predict(fit, w[idx, :])), (l_fit, r_fit, m_fit))
+            else
+                l_hat[idx], r_hat[idx, 1] = map(fit -> mean(predict(fit, w[idx, :])), (l_fit, r_fit))
+            end
         end
     end
 
     # compute partialled-out residuals
-    y_tilde, x_tilde, z_tilde = (y - l_hat, x - r_hat, z - m_hat)
+    y_tilde, x_tilde = (y - l_hat, x - r_hat)
 
     # return the estimate on the partialled-out data
-    return tsls(y_tilde, x_tilde, z_tilde; intercept = false)[1]
+    # this is the tsls estimator if iv = true, and the OLS estimator otherwise
+    if iv
+        z_tilde = z - m_hat
+        return tsls(y_tilde, x_tilde, z_tilde; intercept = false)[1]
+    else
+        return ols(y_tilde, x_tilde; intercept = false)[1]
+    end
 end
 
-function ddml_iv(y::AbstractVector, x::AbstractVecOrMat, z::AbstractVecOrMat, w::AbstractVecOrMat; num_split::Int = 10, k::Int = 5, min_samples_split::Int = 10, num_trees::Int = 5)
-    results = map(_ -> ddml_iv_single_split(y, x, z, w; k = k, min_samples_split = min_samples_split, num_trees = num_trees), 1:num_split)
+function ddml(y::AbstractVector, x::AbstractVecOrMat, z::AbstractVecOrMat, w::AbstractVecOrMat; iv::Bool = true, num_split::Int = 10, k::Int = 5, min_samples_split::Int = 10, num_trees::Int = 5)
+    results = map(_ -> ddml_single_split(y, x, z, w; iv = iv, k = k, min_samples_split = min_samples_split, num_trees = num_trees), 1:num_split)
     return median(results)
 end
