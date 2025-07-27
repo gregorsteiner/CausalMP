@@ -32,6 +32,7 @@ end
 # return a single sample from the martingale posterior
 function mp_sample(
     y::AbstractVector, x::AbstractVecOrMat, z::AbstractVecOrMat,
+    forest_x::MondrianForest, forest_y::MondrianForest,
     criterion::Function, N::Int, num_trees::Int; W::Union{Nothing, AbstractVecOrMat}=nothing
 )
     n = length(y)
@@ -44,12 +45,6 @@ function mp_sample(
     if W_full !== nothing
         W_full[1:n, :] = W
     end
-
-    forest_input_x = isnothing(W) ? z[:,:] : [z W]
-    forest_x = MondrianForest(x[:, 1], forest_input_x, 10, num_trees)
-
-    forest_input_y = isnothing(W) ? x[:,:] : [x W]
-    forest_y = MondrianForest(y, forest_input_y, 10, num_trees)
 
     for i in (n+1):N
         new_idx = sample(1:(i-1), 1)[1]
@@ -80,10 +75,18 @@ function martingale_posterior(
     criterion::Function = tsls, parallel::Bool = false,
     N::Int = 5 * length(y), B::Int = 100, num_trees::Int = 1
 )
+    # fit initial forests
+    forest_input_x = isnothing(W) ? z[:,:] : [z W]
+    forest_x = MondrianForest(x[:, 1], forest_input_x, 10, num_trees)
+
+    forest_input_y = isnothing(W) ? x[:,:] : [x W]
+    forest_y = MondrianForest(y, forest_input_y, 10, num_trees)
+
+    # Run the Martingale posterior sampling
     if parallel
-        results = ThreadsX.map(_ -> mp_sample(y, x, z, criterion, N, num_trees; W = W), 1:B)
+        results = ThreadsX.map(_ -> mp_sample(y, x, z, forest_x, forest_y, criterion, N, num_trees; W = W), 1:B)
     else
-        results = map(_ -> mp_sample(y, x, z, criterion, N, num_trees; W = W), 1:B)
+        results = map(_ -> mp_sample(y, x, z,  forest_x, forest_y, criterion, N, num_trees; W = W), 1:B)
     end
     return results
 end
