@@ -72,21 +72,21 @@ function performance_measures(point_estimate, ci, true_value) # alternative meth
 end
 
 # Wrapper function that runs the simulation
-function run_simulation(s::Int; M::Int = 100, n::Int = 100, N::Int = 5*n, B::Int = 100, true_value::Float64 = 1.0)
+function run_simulation(s::Int; M::Int = 100, n::Int = 50, N::Int = 5*n, B::Int = 50, true_value::Float64 = 1.0)
     # Preallocate arrays
     methods = ["MP sisVIVE", "gIVBMA", "Bayes IV (DP)", "Oracle Bayes IV (DP)", "Naive TSLS", "Oracle TSLS"]
     abs_errors = zeros(length(methods), M)
     coverage_flags = falses(length(methods), M)
     interval_lengths = zeros(length(methods), M)
 
-    @showprogress Threads.@threads for i in 1:M
-    #@showprogress for i in 1:M
+    #@showprogress Threads.@threads for i in 1:M
+    @showprogress for i in 1:M
         # Simulate data
         y, x, z = generate_data(s; n = n, τ = true_value)
 
         # Get posterior samples
         mp_fit = martingale_posterior(
-            y, x, z; W = z, N = N, B = B,
+            y, x, z; W = z, N = N, B = B, parallel = false,
             criterion = (y, x, z, W) -> sisvive(y, x, z)
         )
         mp = getindex.(mp_fit, 2)
