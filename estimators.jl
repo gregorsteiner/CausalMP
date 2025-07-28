@@ -59,6 +59,30 @@ function sisvive(y::AbstractVector, x::AbstractVecOrMat, z::AbstractVecOrMat)
     return [0.0; res[:beta]] # add 0.0 since sisvive does not return an intercept
 end
 
+
+# auxiliary function that returns the indices for k-fold cross-validation
+function kfold_indices(n::Int, k::Int; shuffle::Bool = true)
+    @assert k > 1 "Number of folds k must be at least 2."
+    @assert n >= k "Number of samples n must be at least equal to k."
+
+    indices = collect(1:n)
+    if shuffle
+        shuffle!(indices)
+    end
+    base_size = div(n, k)
+    remainder = rem(n, k)
+
+    folds = Vector{Vector{Int}}(undef, k)
+    start = 1
+    for i in 1:k
+        fold_size = base_size + (i <= remainder ? 1 : 0)
+        folds[i] = indices[start:start + fold_size - 1]
+        start += fold_size
+    end
+
+    return folds
+end
+
 # DDML IV
 # This implements a double/debiased machine learning approach for IV estimation in a partially linear model
 # see e.g. Chernozhukov et. al. (2018, 2024)
