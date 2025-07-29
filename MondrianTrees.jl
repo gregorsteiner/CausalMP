@@ -168,7 +168,7 @@ function predict(tree::MondrianTree, x_new::Vector{Float64})
     node = ""
     τ_parent = 0.0
     p_not_separated_yet = 1.0
-    w, m, v = (Float64[], Float64[], Float64[]) # storage objects for the weights, mean, and sd for each node on the path
+    w, m, v = (Float64[], Float64[], Float64[]) # storage objects for the weights, mean, and std for each node on the path
     while true
         node_id = findfirst(node .== tree.nodes)
         Δ = tree.τ[node_id] - τ_parent
@@ -183,8 +183,8 @@ function predict(tree::MondrianTree, x_new::Vector{Float64})
         push!(m, mean(y_node))
 
         # if there is only one observation in a leaf node,
-        # set the std to overall std
-        y_std = ifelse(length(y_node) > 1, std(y_node; corrected = false), std(tree.y))
+        # set the std to 0.0, i.e. the predictive becomes a point mass
+        y_std = length(y_node) > 1 ? std(y_node) : 0.0
         push!(v, y_std)
 
         if tree.is_leaf[node_id]

@@ -13,7 +13,7 @@ y, x, z, W = (d.GDP, d.Exprop, d.logMort, Matrix(d[:, ["Latitude", "Africa", "As
 
 
 # run analysis
-N, B, num_trees, parallel = (200, 500, 2, true) # set the Martingale posterior parameters
+N, B, num_trees, parallel = (200, 500, 5, true) # set the Martingale posterior parameters
 Random.seed!(42)
 
 mp_tsls = martingale_posterior(y, x, z; W = W, N = N, B = B, num_trees = num_trees, parallel = parallel)
