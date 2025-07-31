@@ -6,12 +6,28 @@ using Printf
 
 ## function that creates a table with the simulation results
 function generate_latex_table_from_dict(data::Dict{String, Any})
-    keys_sorted = sort(collect(keys(data)), by = x -> parse(Int, split(x, "=")[end]))
-    metrics = [:MAE, :Coverage, :MIL]
-    metric_labels = ["MAE", "Coverage", "MIL"]
+    # Sort keys lexicographically (alphabetical order)
+    keys_sorted = sort(collect(keys(data)))
+    
+    # Base metrics always included
+    base_metrics = [:MAE, :Coverage, :MIL]
+    base_labels = ["MAE", "Coverage", "MIL"]
+
+    # Check if Bias is present in the first scenario to decide inclusion
+    first_key = keys_sorted[1]
+    include_bias = haskey(data[first_key], :Bias)
+
+    # Build metrics and labels conditionally, placing Bias as second column if included
+    if include_bias
+        # Insert Bias after MAE, before Coverage and MIL
+        metrics = [:MAE, :Bias, :Coverage, :MIL]
+        metric_labels = ["MAE", "Bias", "Coverage", "MIL"]
+    else
+        metrics = copy(base_metrics)
+        metric_labels = copy(base_labels)
+    end
     n_metrics = length(metrics)
 
-    first_key = keys_sorted[1]
     methods = data[first_key].methods
     n_methods = length(methods)
 
@@ -25,13 +41,17 @@ function generate_latex_table_from_dict(data::Dict{String, Any})
             if metric == :Coverage
                 diffs = abs.(values .- 0.95)
                 best_indices[k][metric] = LinearIndices(diffs)[argmin(diffs)]
+            elseif metric == :Bias
+                # Bias: bold value closest to zero
+                diffs = abs.(values)
+                best_indices[k][metric] = LinearIndices(diffs)[argmin(diffs)]
             else
                 best_indices[k][metric] = LinearIndices(values)[argmin(values)]
             end
         end
     end
 
-    # Begin LaTeX
+    # Begin LaTeX table generation
     latex = "\\begin{tabular}{l" * "c"^(n_metrics * length(keys_sorted)) * "}\n"
     latex *= "\\toprule\n"
     latex *= " & " * join(["\\multicolumn{$n_metrics}{c}{\$ $k \$}" for k in keys_sorted], " & ") * " \\\\\n"
@@ -45,7 +65,7 @@ function generate_latex_table_from_dict(data::Dict{String, Any})
     end
     latex *= " \\\\\n\\midrule\n"
 
-    # Rows
+    # Rows with values and bolding logic
     for i in 1:n_methods
         row = methods[i]
         for k in keys_sorted
@@ -66,6 +86,13 @@ end
 
 
 
+
 ## Plot results of the invalid instrument simulation
 data_invalid = load("Results_Invalid.jld2")
 generate_latex_table_from_dict(data_invalid)
+
+
+## Plot results of the TSLS simulation
+data_tsls = load("Results_TSLS.jld2")
+generate_latex_table_from_dict(data_tsls)
+
