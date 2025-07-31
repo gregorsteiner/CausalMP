@@ -10,8 +10,8 @@ using ThreadsX
 # return a single sample from the martingale posterior
 function mp_sample(
     y::AbstractVector, x::AbstractVecOrMat, z::AbstractVecOrMat,
-    forest_x::MondrianForest, forest_y::MondrianForest,
-    criterion::Function, N::Int, num_trees::Int; W::Union{Nothing, AbstractVecOrMat}=nothing
+    forest_x::MondrianForest, forest_y::MondrianForest, β_init::AbstractVector,
+    score::Function, N::Int, num_trees::Int; W::Union{Nothing, AbstractVecOrMat}=nothing
 )
     n = length(y)
     y_full = Vector{eltype(y)}(undef, N)
@@ -26,7 +26,9 @@ function mp_sample(
         W_full[1:n, :] .= W
     end
 
+    β = β_init
     for i in (n+1):N
+        # predict new observatio
         new_idx = sample(1:(i-1), 1)[1]
         z_full[i, :] = z_full[new_idx, :]
         if W_full !== nothing
@@ -40,10 +42,12 @@ function mp_sample(
         input_vec_y = isnothing(W) ? x_full[i, :] : [x_full[i, :]; W_full[i, :]]
         y_full[i] = rand(predict(forest_y, input_vec_y))
         extend!(forest_y, input_vec_y, y_full[i])
+
+        # update β estimate
+        β = β .+ score(y_full[i], x_full[i], z_full[i], β) / (i-n)
     end
 
-    result = isnothing(W) ? criterion(y_full, x_full, z_full) : criterion(y_full, x_full, z_full, W_full)
-    return result
+    return β
 end
 
 
@@ -52,8 +56,8 @@ end
 function martingale_posterior(
     y::AbstractVector, x::AbstractVecOrMat, z::AbstractVecOrMat;
     W::Union{Nothing, AbstractVecOrMat} = nothing,
-    criterion::Function = tsls, parallel::Bool = false,
-    N::Int = 5 * length(y), B::Int = 100, num_trees::Int = 1
+    estimator::Function = tsls, score::Function = (y, x, z, β) -> z * (y - ([1 x] * β)[1]), 
+    N::Int = 5 * length(y), B::Int = 100, num_trees::Int = 1, parallel::Bool = false
 )
     # fit initial forests
     forest_input_x = isnothing(W) ? z[:,:] : [z W]
@@ -62,15 +66,18 @@ function martingale_posterior(
     forest_input_y = isnothing(W) ? x[:,:] : [x W]
     forest_y = MondrianForest(y, forest_input_y, 10, num_trees)
 
+    # initial estimate
+    β_init = isnothing(W) ? estimator(y, x, z) : estimator(y, x, z, W)
+
     # Run the Martingale posterior sampling
     if parallel
         results = ThreadsX.map(_ -> begin
             local_forest_x = deepcopy(forest_x) # copy the forest objects for thread-safety
             local_forest_y = deepcopy(forest_y) # otherwise the extended forests could be shared among threads 
-            mp_sample(y, x, z, local_forest_x, local_forest_y, criterion, N, num_trees; W = W)
+            mp_sample(y, x, z, local_forest_x, local_forest_y, β_init, score, N, num_trees; W = W)
         end, 1:B)
     else
-        results = map(_ -> mp_sample(y, x, z, forest_x, forest_y, criterion, N, num_trees; W = W), 1:B)
+        results = map(_ -> mp_sample(y, x, z, forest_x, forest_y, β_init, score, N, num_trees; W = W), 1:B)
     end
     return results
 end
