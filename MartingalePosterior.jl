@@ -43,8 +43,12 @@ function mp_sample(
         y_full[i] = rand(predict(forest_y, input_vec_y))
         extend!(forest_y, input_vec_y, y_full[i])
 
+        # Estimate the Fisher information as the variance of the scores
+        # Evaluated at all previous observations for the current β
+        fi_hat = var([score(y_full[j], x_full[j], z_full[j], β) for j in 1:i])
+
         # update β estimate
-        β = β .+ score(y_full[i], x_full[i], z_full[i], β) / (i-n)
+        β = β .+ score(y_full[i], x_full[i], z_full[i], β) / ((i-n)/2 * fi_hat)
     end
 
     return β
