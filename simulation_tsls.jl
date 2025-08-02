@@ -44,7 +44,7 @@ function performance_measures(point_estimate, ci, true_value) # alternative meth
 end
 
 # Wrapper function that runs the simulation
-function run_simulation(dist::String; M::Int = 100, n::Int = 100, N::Int = 5*n, B::Int = 100, true_value::Float64 = 1.0)
+function run_simulation(dist::String; M::Int = 100, n::Int = 50, N::Int = 5*n, B::Int = 100, true_value::Float64 = 1.0)
     # Preallocate arrays
     methods = ["MP TSLS", "TSLS"]
     errors = zeros(length(methods), M)
@@ -73,6 +73,7 @@ function run_simulation(dist::String; M::Int = 100, n::Int = 100, N::Int = 5*n, 
 
     return (MAE = mae, Bias = bias, Coverage = coverage, MIL = median_interval_length, methods = methods)
 end
+
 
 result = map(run_simulation, ["Gaussian", "t"])
 print(result)

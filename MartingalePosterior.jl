@@ -6,12 +6,25 @@ using InvertedIndices
 using ThreadsX
 
 
+# efficient influence function for the linear iv model
+function eif_linear_iv(y, x, z, β)
+    n = length(y)
+
+    X, Z = map(add_intercept, (x, z))
+
+    # estimate the ``fisher information'' on the previous n-1 observations
+    fi_hat = sum([Z[j, :] * X[j, :]' for j in 1:n-1]) / (n-1)
+
+    # compute the efficient influence function for the n-th observation
+    eif = inv(fi_hat) * Z[n, :] * (y[n] - dot(X[n, :], β))
+    return eif
+end
 
 # return a single sample from the martingale posterior
 function mp_sample(
     y::AbstractVector, x::AbstractVecOrMat, z::AbstractVecOrMat,
     forest_x::MondrianForest, forest_y::MondrianForest, β_init::AbstractVector,
-    score::Function, N::Int, num_trees::Int; W::Union{Nothing, AbstractVecOrMat}=nothing
+    eif::Function, N::Int, num_trees::Int; W::Union{Nothing, AbstractVecOrMat}=nothing
 )
     n = length(y)
     y_full = Vector{eltype(y)}(undef, N)
@@ -43,12 +56,8 @@ function mp_sample(
         y_full[i] = rand(predict(forest_y, input_vec_y))
         extend!(forest_y, input_vec_y, y_full[i])
 
-        # Estimate the Fisher information as the variance of the scores
-        # Evaluated at all previous observations for the current β
-        fi_hat = var([score(y_full[j], x_full[j], z_full[j], β) for j in 1:i])
-
         # update β estimate
-        β = β .+ score(y_full[i], x_full[i], z_full[i], β) / ((i-n)/2 * fi_hat)
+        β = β + eif(y_full[1:i], x_full[1:i, :], z_full[1:i, :], β) / i
     end
 
     return β
@@ -60,7 +69,7 @@ end
 function martingale_posterior(
     y::AbstractVector, x::AbstractVecOrMat, z::AbstractVecOrMat;
     W::Union{Nothing, AbstractVecOrMat} = nothing,
-    estimator::Function = tsls, score::Function = (y, x, z, β) -> z * (y - ([1 x] * β)[1]), 
+    estimator::Function = tsls, eif::Function = eif_linear_iv, 
     N::Int = 5 * length(y), B::Int = 100, num_trees::Int = 1, parallel::Bool = false
 )
     # fit initial forests
@@ -78,10 +87,10 @@ function martingale_posterior(
         results = ThreadsX.map(_ -> begin
             local_forest_x = deepcopy(forest_x) # copy the forest objects for thread-safety
             local_forest_y = deepcopy(forest_y) # otherwise the extended forests could be shared among threads 
-            mp_sample(y, x, z, local_forest_x, local_forest_y, β_init, score, N, num_trees; W = W)
+            mp_sample(y, x, z, local_forest_x, local_forest_y, β_init, eif, N, num_trees; W = W)
         end, 1:B)
     else
-        results = map(_ -> mp_sample(y, x, z, forest_x, forest_y, β_init, score, N, num_trees; W = W), 1:B)
+        results = map(_ -> mp_sample(y, x, z, forest_x, forest_y, β_init, eif, N, num_trees; W = W), 1:B)
     end
     return results
 end
