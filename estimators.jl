@@ -19,6 +19,12 @@ function ols(y::AbstractVector, x::AbstractVecOrMat; intercept::Bool = true)
     ols(y, x, Matrix{eltype(x)}(undef, size(x, 1), 0); intercept = intercept)
 end
 
+# outcome regression estimate for the ATE
+function or_ate(y::AbstractVector, x::AbstractVecOrMat, W::AbstractVecOrMat)
+    β = ols(y, x, W)
+    return β[2]
+end
+
 # Two-Stage Least Squares (TSLS)
 function tsls(y::AbstractVector, x::AbstractVecOrMat, z::AbstractVecOrMat, W::AbstractVecOrMat; intercept::Bool = true, ci::Bool = false, level::Float64 = 0.05)
     U, V = ([x W], [z W])
@@ -43,6 +49,35 @@ end
 function tsls(y::AbstractVector, x::AbstractVecOrMat, z::AbstractVecOrMat; intercept::Bool = true, ci::Bool = false, level::Float64 = 0.05)
     tsls(y, x, z, Matrix{eltype(x)}(undef, size(x, 1), 0); intercept = intercept, ci = ci, level = level)
 end
+
+
+# Manual logistic regression
+function fit_logistic(x, W; max_iter=25, tol=1e-6)
+    n, p = size(W)
+    β = zeros(p)
+    for i in 1:max_iter
+        η = W * β
+        p̂ = 1.0 ./ (1.0 .+ exp.(-η))
+        W_diag = Diagonal(p̂ .* (1 .- p̂))
+        z = η + (x .- p̂) ./ (p̂ .* (1 .- p̂) .+ eps())  # Add eps to avoid divide by zero
+        XWX = W' * W_diag * W
+        XWz = W' * W_diag * z
+        β_new = XWX \ XWz
+        if norm(β_new - β) < tol
+            break
+        end
+        β = β_new
+    end
+    return β
+end
+
+# Predict probability for new data
+function predict_logistic(β, w_new)
+    η = w_new' * β
+    p_new = 1.0 / (1.0 + exp(-η))
+    return p_new
+end
+
 
 # sisVIVE criterion function (see Kang et. al., 2016)
 function sisvive(y::AbstractVector, x::AbstractVecOrMat, z::AbstractVecOrMat)
