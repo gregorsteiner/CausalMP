@@ -6,12 +6,21 @@ add_intercept(x) = [ones(eltype(x), size(x, 1)) x] # auxiliary function to add c
 project(X) = X * inv(X'X) * X' # projection onto the space spanned by X
 
 # OLS
-function ols(y::AbstractVector, x::AbstractVecOrMat, W::AbstractVecOrMat; intercept::Bool = true)
+function ols(y::AbstractVector, x::AbstractVecOrMat, W::AbstractVecOrMat; intercept::Bool = true, ci::Bool = false, level::Float64 = 0.05)
     U = [x W]
     if intercept
         U = add_intercept(U)
     end
     β_hat = inv(U'U) * U'y
+
+    if ci
+        residuals = y - U * β_hat
+        σ2_hat = sum(residuals.^2) / (size(U, 1) - size(U, 2))
+        cov = σ2_hat * inv(U' * U)
+        ci = [β_hat[j] .+ [-1, 1] * quantile(Normal(0, 1), 1 - level/2) * sqrt(cov[j, j]) for j in eachindex(β_hat)]
+        return (beta_hat = β_hat, ci = ci)
+    end 
+
     return β_hat
 end
 
@@ -20,9 +29,12 @@ function ols(y::AbstractVector, x::AbstractVecOrMat; intercept::Bool = true)
 end
 
 # outcome regression estimate for the ATE
-function or_ate(y::AbstractVector, x::AbstractVecOrMat, W::AbstractVecOrMat)
-    β = ols(y, x, W)
-    return β[2]
+function or_ate(y::AbstractVector, x::AbstractVecOrMat, W::AbstractVecOrMat; ci::Bool = false, level::Float64 = 0.05)
+    res = ols(y, x, W; ci = ci, level = level)
+    if ci
+        return(beta_hat = res.beta_hat[2], ci = res.ci[2]) # the 2nd index is x (an intercept is always included)
+    end
+    return res[2]
 end
 
 # Two-Stage Least Squares (TSLS)
