@@ -7,7 +7,7 @@ using ThreadsX
 
 
 # efficient influence function for the linear iv model
-function eif_linear_iv(y, x, w, z, β)
+function eif_linear_iv(y, x, z, β)
     n = length(y)
 
     X, Z = map(add_intercept, (x, z))
@@ -22,7 +22,7 @@ end
 
 # efficient influence function for the ATE
 # this function assumes x is binary (i.e. x = 0, 1)
-function eif_ate(y, x, w, z, θ)
+function eif_ate(y, x, w, θ)
     n = length(y)
 
     W = add_intercept(w)
@@ -44,41 +44,49 @@ function eif_ate(y, x, w, z, θ)
 end
 
 # return a single sample from the martingale posterior
-function mp_sample(
-    y::AbstractVector, x::AbstractVecOrMat, β_init,
-    eif::Function, N::Int;
-    W::Union{Nothing, AbstractVecOrMat} = nothing, z::Union{Nothing, AbstractVecOrMat} = nothing
+# this method is for the ATE estimation (including covariates W) 
+function mp_sample_ate(
+    y::AbstractVector, x::AbstractVecOrMat, w::AbstractVecOrMat,
+    β_init, eif::Function, N::Int
 )
     n = length(y)
-    y_full = Vector{eltype(y)}(undef, N)
-    x_full = Matrix{eltype(x)}(undef, N, size(x, 2))
+    y_full, x_full, w_full = Vector{eltype(y)}(undef, N), Matrix{eltype(x)}(undef, N, size(x, 2)), Matrix{eltype(w)}(undef, N, size(w, 2))
     y_full[1:n] .= y
     x_full[1:n, :] .= x
-
-    W_full = isnothing(W) ? nothing : Matrix{eltype(W)}(undef, N, size(W, 2))
-    z_full = isnothing(z) ? nothing : Matrix{eltype(z)}(undef, N, size(z, 2))
-    if W_full !== nothing
-        W_full[1:n, :] .= W
-    end
-    if z_full !== nothing
-        z_full[1:n, :] .= z
-    end
-    
+    w_full[1:n, :] .= w
 
     β = β_init
     for i in (n+1):N
         # predict new observatio
         new_idx = sample(1:(i-1), 1)[1]
-        y_full[i], x_full[i, :] = y_full[new_idx], x_full[new_idx, :]
-        if W_full !== nothing
-            W_full[i, :] = W_full[new_idx, :]
-        end
-        if z_full !== nothing
-            z_full[i, :] = z_full[new_idx, :]
-        end
+        y_full[i], x_full[i, :], w_full[i, :] = y_full[new_idx], x_full[new_idx, :], w_full[new_idx, :]
 
         # update β estimate
-        β = β + eif(y_full[1:i], x_full[1:i, :], W_full[1:i, :], z_full, β) / i
+        β = β + eif(y_full[1:i], x_full[1:i, :], w_full[1:i, :], β) / i
+    end
+
+    return β
+end
+
+# this method is for the ATE estimation
+function mp_sample_iv(
+    y::AbstractVector, x::AbstractVecOrMat, z::AbstractVecOrMat,
+    β_init, eif::Function, N::Int
+)
+    n = length(y)
+    y_full, x_full, z_full = Vector{eltype(y)}(undef, N), Matrix{eltype(x)}(undef, N, size(x, 2)), Matrix{eltype(z)}(undef, N, size(z, 2))
+    y_full[1:n] .= y
+    x_full[1:n, :] .= x
+    z_full[1:n, :] .= z
+
+    β = β_init
+    for i in (n+1):N
+        # predict new observatio
+        new_idx = sample(1:(i-1), 1)[1]
+        y_full[i], x_full[i, :], z_full[i, :] = y_full[new_idx], x_full[new_idx, :], z_full[new_idx, :]
+
+        # update β estimate
+        β = β + eif(y_full[1:i], x_full[1:i, :], z_full[1:i, :], β) / i
     end
 
     return β
@@ -86,32 +94,31 @@ end
 
 
 # implement the martingale posterior approach
-# No need to add an intercept in x and z (will be done automatically)
+# No need to add an intercept in x, z, or W (will be done automatically)
 function martingale_posterior(
     y::AbstractVector, x::AbstractVecOrMat;
-    W::Union{Nothing, AbstractVecOrMat} = nothing, z::Union{Nothing, AbstractVecOrMat} = nothing,
-    estimator::Function = tsls, eif::Function = eif_linear_iv, 
-    N::Int = 5 * length(y), B::Int = 100, parallel::Bool = false
+    w::Union{Nothing, AbstractVecOrMat} = nothing, z::Union{Nothing, AbstractVecOrMat} = nothing,
+    N::Int = 5 * length(y), B::Int = 100
 )
-    # fit initial forests
-    #forest_input_x = isnothing(W) ? z[:,:] : [z W]
-    #forest_x = MondrianForest(x[:, 1], forest_input_x, 10, num_trees)
+    # check if instruments are provided
+    type = isnothing(z) ? "ATE" : "IV"
 
-    #forest_input_y = isnothing(W) ? x[:,:] : [x W]
-    #forest_y = MondrianForest(y, forest_input_y, 10, num_trees)
+    if type == "ATE"
+        # initial estimate
+        β_init = or_ate(y, x, w)
 
-    # initial estimate
-    β_init = isnothing(z) ? estimator(y, x, W) : estimator(y, x, z, W)
-
-    # Run the Martingale posterior sampling
-    if parallel
+        # Run the Martingale posterior sampling
         results = ThreadsX.map(_ -> begin
-            #local_forest_x = deepcopy(forest_x) # copy the forest objects for thread-safety
-            #local_forest_y = deepcopy(forest_y) # otherwise the extended forests could be shared among threads 
-            mp_sample(y, x, β_init, eif, N; W = W, z = z)
-        end, 1:B)
-    else
-        results = map(_ -> mp_sample(y, x, β_init, eif, N; W = W, z = z), 1:B)
+                                        mp_sample_ate(y, x, w, β_init, eif_ate, N)
+                                    end, 1:B)
+    elseif type == "IV"
+        # initial estimate
+        β_init = tsls(y, x, z)
+
+        # Run the Martingale posterior sampling
+        results = ThreadsX.map(_ -> begin
+                                        mp_sample_iv(y, x, z, β_init, eif_linear_iv, N)
+                                    end, 1:B)
     end
     return results
 end

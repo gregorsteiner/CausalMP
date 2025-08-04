@@ -27,11 +27,8 @@ function generate_data(dist, n; c = 1/2, tau = 1.0)
     return (y = y, x = x, w = w)
 end
 
-y, x, w = generate_data("Gaussian", 500)
-θ = or_ate(y, x, w)
+y, x, w = generate_data("t", 500)
 
-eif_ate(y, x, w, nothing, θ)
-
-res = martingale_posterior(y, x; W = w, estimator = or_ate, eif = eif_ate)
+res = martingale_posterior(y, x; w = w)
 quantile(res, [0.025, 0.5, 0.975])
 
