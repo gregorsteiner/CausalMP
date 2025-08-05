@@ -11,7 +11,7 @@ function ols(y::AbstractVector, x::AbstractVecOrMat, W::AbstractVecOrMat; interc
     if intercept
         U = add_intercept(U)
     end
-    β_hat = inv(U'U) * U'y
+    β_hat = U'U \ U'y
 
     if ci
         residuals = y - U * β_hat
@@ -44,7 +44,7 @@ function tsls(y::AbstractVector, x::AbstractVecOrMat, z::AbstractVecOrMat, W::Ab
         U, V = map(add_intercept, (U, V))
     end
     P_V = project(V)
-    β_hat = inv(U' * P_V * U) * U' * P_V * y
+    β_hat = (U' * P_V * U) \ (U' * P_V * y)
 
     if ci
         residuals = y - U * β_hat
