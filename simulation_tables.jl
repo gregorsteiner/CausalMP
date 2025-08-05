@@ -1,6 +1,5 @@
 
 # This file creates the plots to illustrate the simulation results
-
 using JLD2
 using Printf
 
@@ -9,26 +8,12 @@ function generate_latex_table_from_dict(data::Dict{String, Any})
     # Sort keys lexicographically (alphabetical order)
     keys_sorted = sort(collect(keys(data)))
     
-    # Base metrics always included
-    base_metrics = [:MAE, :Coverage, :MIL]
-    base_labels = ["MAE", "Coverage", "MIL"]
-
-    # Check if Bias is present in the first scenario to decide inclusion
-    first_key = keys_sorted[1]
-    include_bias = haskey(data[first_key], :Bias)
-
-    # Build metrics and labels conditionally, placing Bias as second column if included
-    if include_bias
-        # Insert Bias after MAE, before Coverage and MIL
-        metrics = [:MAE, :Bias, :Coverage, :MIL]
-        metric_labels = ["MAE", "Bias", "Coverage", "MIL"]
-    else
-        metrics = copy(base_metrics)
-        metric_labels = copy(base_labels)
-    end
+    # Metrics and their display labels, always MAE, Bias, Coverage, MIL
+    metrics = [:MAE, :Bias, :Coverage, :MIL]
+    metric_labels = ["MAE", "Bias", "Coverage", "MIL"]
     n_metrics = length(metrics)
 
-    methods = data[first_key].methods
+    methods = data[keys_sorted[1]].methods
     n_methods = length(methods)
 
     # Compute best values for bolding
@@ -84,12 +69,6 @@ function generate_latex_table_from_dict(data::Dict{String, Any})
     return println(latex)
 end
 
-
-
-
-## Plot results of the invalid instrument simulation
-data_invalid = load("Results_Invalid.jld2")
-generate_latex_table_from_dict(data_invalid)
 
 
 ## Plot results of the TSLS simulation

@@ -44,7 +44,7 @@ function performance_measures(point_estimate, ci, true_value) # alternative meth
 end
 
 # Wrapper function that runs the simulation
-function run_simulation(dist::String; M::Int = 100, n::Int = 50, N::Int = 5*n, B::Int = 100, true_value::Float64 = 1.0)
+function run_simulation(dist::String; M::Int = 100, n::Int = 100, N::Int = 5*n, B::Int = 100, true_value::Float64 = 1.0)
     # Preallocate arrays
     methods = ["MP TSLS", "TSLS"]
     errors = zeros(length(methods), M)
@@ -56,7 +56,7 @@ function run_simulation(dist::String; M::Int = 100, n::Int = 50, N::Int = 5*n, B
         y, x, z = generate_data(dist, n; tau = true_value)
 
         # Get posterior samples
-        mp_fit = martingale_posterior(y, x, z; N = N, B = B, parallel = true)
+        mp_fit = martingale_posterior(y, x; z = z, N = N, B = B)
         mp = getindex.(mp_fit, 2)
         tsls_fit = tsls(y, x, z; intercept = true, ci = true)
 
