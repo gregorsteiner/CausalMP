@@ -32,7 +32,7 @@ end
 function or_ate(y::AbstractVector, x::AbstractVecOrMat, W::AbstractVecOrMat; ci::Bool = false, level::Float64 = 0.05)
     res = ols(y, x, W; ci = ci, level = level)
     if ci
-        return(beta_hat = res.beta_hat[2], ci = res.ci[2]) # the 2nd index is x (an intercept is always included)
+        return(ate_hat = res.beta_hat[2], ci = res.ci[2]) # the 2nd index is x (an intercept is always included)
     end
     return res[2]
 end
@@ -88,6 +88,35 @@ function predict_logistic(β, w_new)
     η = w_new' * β
     p_new = 1.0 / (1.0 + exp(-η))
     return p_new
+end
+
+# Inverse propensity weighting
+function ipw_ate(y, x, w)
+    n = length(y)
+
+    # fit propensity score
+    β = fit_logistic(x, w)
+    e = [predict_logistic(β, w[i, :]) for i in 1:n]
+
+    # trim propensity score (to avoid NaN)
+    e = clamp.(e, 0.005, 0.995)
+
+    # estimate ATE
+    ate = mean(x .* y ./ e - (1 .- x) .* y ./ (1 .- e))
+    return ate
+end
+
+function bootstrap_ipw_ate(y, x, w; n_boot=1000)
+    n = length(y)
+    ates = zeros(n_boot)
+    for b in 1:n_boot
+        inds = sample(1:n, n, replace=true)
+        y_b, x_b, w_b = y[inds], x[inds], w[inds, :]
+        ates[b] = ipw_ate(y_b, x_b, w_b)
+    end
+    ate_hat = ipw_ate(y, x, w)
+    ci = quantile(ates, [0.025, 0.975])
+    return (ate_hat = ate_hat, ci = ci)
 end
 
 

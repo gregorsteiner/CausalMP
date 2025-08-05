@@ -46,7 +46,7 @@ end
 # Wrapper function that runs the simulation
 function run_simulation(dist::String; M::Int = 100, n::Int = 100, N::Int = 5*n, B::Int = 100, true_value::Float64 = 1.0)
     # Preallocate arrays
-    methods = ["MP TSLS", "TSLS"]
+    methods = ["MP IV", "TSLS"]
     errors = zeros(length(methods), M)
     coverage_flags = falses(length(methods), M)
     interval_lengths = zeros(length(methods), M)

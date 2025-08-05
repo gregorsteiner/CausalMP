@@ -70,6 +70,10 @@ function generate_latex_table_from_dict(data::Dict{String, Any})
 end
 
 
+## Plot resuults of the ATE simulation
+data_ate = load("Results_ATE.jld2")
+generate_latex_table_from_dict(data_ate)
+
 
 ## Plot results of the TSLS simulation
 data_tsls = load("Results_TSLS.jld2")
