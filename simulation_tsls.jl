@@ -44,7 +44,7 @@ function performance_measures(point_estimate, ci, true_value) # alternative meth
 end
 
 # Wrapper function that runs the simulation
-function run_simulation(dist::String; M::Int = 100, n::Int = 100, N::Int = 5*n, B::Int = 100, true_value::Float64 = 1.0)
+function run_simulation(dist::String, n::Int; M::Int = 100, N::Int = 5*n, B::Int = 100, true_value::Float64 = 1.0)
     # Preallocate arrays
     methods = ["MP IV", "TSLS"]
     errors = zeros(length(methods), M)
@@ -71,10 +71,80 @@ function run_simulation(dist::String; M::Int = 100, n::Int = 100, N::Int = 5*n, 
     coverage = mean(coverage_flags; dims = 2)
     median_interval_length = median(interval_lengths; dims = 2)
 
-    return (MAE = mae, Bias = bias, Coverage = coverage, MIL = median_interval_length, methods = methods)
+    return (MAE = mae, Bias = bias, Coverage = coverage, MIL = median_interval_length, methods = methods, distribution = dist, n = n)
 end
 
 
-result = map(run_simulation, ["Gaussian", "t"])
+result = map(run_simulation, ["Gaussian", "t", "Gaussian", "t"], [50, 50, 250, 250])
 print(result)
-save("Results_TSLS.jld2", Dict("Gaussian" => result[1], "t" => result[2]))
+
+## create table with results
+using Printf  # for @sprintf if preferred
+function performance_table_latex(results)
+    dists = unique(getfield.(results, :distribution))
+    ns = unique(getfield.(results, :n))
+    methods = results[1].methods
+    nmethods = length(methods)
+    perf = [:MAE, :Bias, :Coverage, :MIL]
+    ncols = length(dists) * length(perf)
+
+    # Start table: no vertical bars for booktabs style
+    table = "\\begin{tabular}{ll" * repeat("c", ncols) * "}\n"
+    
+    # Toprule
+    table *= "\\toprule\n"
+    
+    # Header row 1: distribution names with multicolumn for metrics
+    table *= "Sample Size & Method "
+    for d in dists
+        table *= "& \\multicolumn{4}{c}{" * string(d) * "}"
+    end
+    table *= " \\\\\n"
+    
+    # Header row 2: metric names
+    table *= " & "  # empty for sample size & method column
+    for _ in dists
+        for p in perf
+            table *= "& " * string(p) * " "
+        end
+    end
+    table *= " \\\\\n"
+    
+    # Midrule
+    table *= "\\midrule\n"
+
+    # Data rows
+    for n in ns
+        for i_m in 1:nmethods
+            if i_m == 1
+                # Multirow with sample size printed as n in mathmode
+                table *= "\\multirow{$(nmethods)}{*}{\\(n = $(n)\\)} "
+            else
+                table *= " "  # empty space for following rows in sample size group
+            end
+            # Method name column
+            table *= "& " * string(methods[i_m]) * " "
+            for dist in dists
+                idx = findfirst(x -> x.distribution == dist && x.n == n, results)
+                if idx === nothing
+                    error("Missing data for distribution=$dist and n=$n")
+                end
+                tup = results[idx]
+                for p in perf
+                    val = tup[p][i_m]
+                    table *= "& " * @sprintf("%.3f", val) * " "
+                end
+            end
+            table *= " \\\\\n"
+        end
+        table *= "\\midrule\n"
+    end
+    
+    # Bottomrule
+    table *= "\\bottomrule\n"
+    table *= "\\end{tabular}"
+    return println(table)
+end
+
+
+performance_table_latex(result)
