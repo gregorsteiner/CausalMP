@@ -35,10 +35,10 @@ function eif_ate(y, x, w, θ)
 
     β_ps = fit_logistic(x_train, W_train) # propensity model parameters
     pi_ps = predict_logistic(β_ps, W[n, :]) # predicted propensity score
-    
+
     # compute the influence function
-    ϕ_0 = (x[n] == 0) * (y[n] - m_0) / (1-pi_ps) + m_0
-    ϕ_1 = (x[n] == 1) * (y[n] - m_1) / (pi_ps) + m_1
+    ϕ_0 = (1 - x[n]) * (y[n] - m_0) / (1-pi_ps) + m_0
+    ϕ_1 = x[n] * (y[n] - m_1) / (pi_ps) + m_1
     eif = ϕ_1 - ϕ_0 - θ
     return eif
 end
@@ -105,7 +105,7 @@ function martingale_posterior(
 
     if type == "ATE"
         # initial estimate
-        β_init = or_ate(y, x, w)
+        β_init = aipw_ate(y, x, w)
 
         # Run the Martingale posterior sampling
         results = ThreadsX.map(_ -> begin

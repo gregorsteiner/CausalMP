@@ -1,5 +1,7 @@
 
+using LinearAlgebra, Distributions, Random
 using RCall
+#using GLM, DataFrames
 
 # Some auxiliary functions
 add_intercept(x) = [ones(eltype(x), size(x, 1)) x] # auxiliary function to add column of ones to matrix x
@@ -64,16 +66,21 @@ end
 
 
 # Manual logistic regression
-function fit_logistic(x, W; max_iter=25, tol=1e-6)
+expit(x) = 1.0 / (1.0 + exp(-x))
+function fit_logistic(x, w; max_iter=25, tol=1e-6)
+    W = add_intercept(w)
     n, p = size(W)
     β = zeros(p)
     for i in 1:max_iter
         η = W * β
-        p̂ = 1.0 ./ (1.0 .+ exp.(-η))
+        p̂ = expit.(η)
         W_diag = Diagonal(p̂ .* (1 .- p̂))
         z = η + (x .- p̂) ./ (p̂ .* (1 .- p̂) .+ eps())  # Add eps to avoid divide by zero
-        XWX = W' * W_diag * W
-        XWz = W' * W_diag * z
+
+        λ = 1/n # heuristic penalty parameter
+        penalty = λ * diagm(0 => [0.0; ones(p-1)])
+        XWX = W' * W_diag * W + penalty
+        XWz = W' * W_diag * z + penalty * β
         β_new = XWX \ XWz
         if norm(β_new - β) < tol
             break
@@ -85,12 +92,13 @@ end
 
 # Predict probability for new data
 function predict_logistic(β, w_new)
-    η = w_new' * β
-    p_new = 1.0 / (1.0 + exp(-η))
+    η = dot([1.0; w_new], β) # intercept is automatically included, so we need to add a 1.0
+    p_new = expit(η)
+    p_new = clamp(p_new, 0.005, 0.995) # trim to avoid extreme propensity scores
     return p_new
 end
 
-# Inverse propensity weighting
+# Inverse propensity weighting point estimator
 function ipw_ate(y, x, w)
     n = length(y)
 
@@ -98,26 +106,59 @@ function ipw_ate(y, x, w)
     β = fit_logistic(x, w)
     e = [predict_logistic(β, w[i, :]) for i in 1:n]
 
-    # trim propensity score (to avoid NaN)
-    e = clamp.(e, 0.005, 0.995)
-
     # estimate ATE
     ate = mean(x .* y ./ e - (1 .- x) .* y ./ (1 .- e))
     return ate
 end
 
-function bootstrap_ipw_ate(y, x, w; n_boot=1000)
+
+# Doubly robust (AIPW) point estimator for ATE
+function aipw_ate(y, x, w)
+    n = length(y)
+
+    # fit propensity score model
+    β_ps = fit_logistic(x, w)
+    e = [predict_logistic(β_ps, w[i, :]) for i in 1:n]
+
+    # fit outcome regression models
+    U = [x add_intercept(w)]
+    β_or = U'U \ U'y
+
+    # Predict E[Y | X=1, W=w] and E[Y | X=0, W=w]
+    μ1_hat = [dot([1.0; 1.0; w[i, :]], β_or) for i in 1:n]
+    μ0_hat = [dot([0.0; 1.0; w[i, :]], β_or) for i in 1:n]
+
+    # Calculate AIPW "pseudo-outcome" for each individual
+    aipw = [μ1_hat[i] - μ0_hat[i] +
+            (x[i] * (y[i] - μ1_hat[i]) / e[i]) -
+            ((1 - x[i]) * (y[i] - μ0_hat[i]) / (1 - e[i]))
+            for i in 1:n]
+
+    # Return ATE estimate
+    return mean(aipw)
+end
+
+# Bootstrapped CI for any ATE estimator
+function bootstrap_ci(y, x, w; estimator = aipw_ate, n_boot = 1000)
     n = length(y)
     ates = zeros(n_boot)
     for b in 1:n_boot
         inds = sample(1:n, n, replace=true)
         y_b, x_b, w_b = y[inds], x[inds], w[inds, :]
-        ates[b] = ipw_ate(y_b, x_b, w_b)
+        try
+            ates[b] = estimator(y_b, x_b, w_b)
+        catch error
+            ates[b] = NaN
+        end
     end
-    ate_hat = ipw_ate(y, x, w)
+    ate_hat = estimator(y, x, w)
+
+    ates = ates[.!isnan.(ates)]
     ci = quantile(ates, [0.025, 0.975])
+
     return (ate_hat = ate_hat, ci = ci)
 end
+
 
 
 # sisVIVE criterion function (see Kang et. al., 2016)
