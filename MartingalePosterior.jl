@@ -105,7 +105,7 @@ function martingale_posterior(
 
     if type == "ATE"
         # initial estimate
-        β_init = aipw_ate(y, x, w)
+        β_init = or_ate(y, x, w)
 
         # Run the Martingale posterior sampling
         results = ThreadsX.map(_ -> begin
