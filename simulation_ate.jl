@@ -1,14 +1,13 @@
 # This file implements a simple simulation experiment
 using Distributions, LinearAlgebra, Random
 using ProgressMeter
-using JLD2
 
 include("MartingalePosterior.jl")
 include("estimators.jl")
+include("simulation_aux.jl")
 
 # data generating function
 expit(x) = 1 / (1 + exp(-x))
-
 function generate_data(dist, n; tau = 1.0)
     α = 0.0
     τ = tau
@@ -25,26 +24,6 @@ function generate_data(dist, n; tau = 1.0)
     y = α .+ τ * x + w * β + u
 
     return (y = y, x = x, w = w)
-end
-
-
-# function that computes the performance criteria
-function performance_measures(posterior_sample, true_value)
-    post_median = median(posterior_sample)
-    lower, upper = quantile(posterior_sample, [0.025, 0.975])
-    return (
-        error = post_median - true_value,
-        coverage_flag = lower <= true_value <= upper,
-        interval_length = upper - lower
-    )
-end
-
-function performance_measures(point_estimate, ci, true_value) # alternative method for the frequentist estimators
-    return (
-        error = point_estimate - true_value,
-        coverage_flag = ci[1] <= true_value <= ci[2],
-        interval_length = ci[2] - ci[1]
-    )
 end
 
 # Wrapper function that runs the simulation
@@ -81,5 +60,6 @@ end
 
 result = map(run_simulation, ["Gaussian", "t"])
 print(result)
-save("Results_ATE.jld2", Dict("Gaussian" => result[1], "t" => result[2]))
+
+
 
