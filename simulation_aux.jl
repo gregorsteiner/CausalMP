@@ -61,7 +61,7 @@ function performance_table_latex(results)
             findall(x -> isapprox(x, minval; atol=1e-8), dist_to_target)
         else
             minval = minimum(abs.(vals))
-            findall(x -> isapprox(x, minval; atol=1e-8), vals)
+            findall(x -> isapprox(abs(x), minval; atol=1e-8), vals)
         end
     end
 

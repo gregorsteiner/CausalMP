@@ -47,7 +47,7 @@ end
 # this method is for the ATE estimation (including covariates W) 
 function mp_sample_ate(
     y::AbstractVector, x::AbstractVecOrMat, w::AbstractVecOrMat,
-    β_init, eif::Function, N::Int
+    β_init, eif::Function, N::Int, ξ::Float64
 )
     n = length(y)
     y_full, x_full, w_full = Vector{eltype(y)}(undef, N), Matrix{eltype(x)}(undef, N, size(x, 2)), Matrix{eltype(w)}(undef, N, size(w, 2))
@@ -62,7 +62,7 @@ function mp_sample_ate(
         y_full[i], x_full[i, :], w_full[i, :] = y_full[new_idx], x_full[new_idx, :], w_full[new_idx, :]
 
         # update β estimate
-        β = β + eif(y_full[1:i], x_full[1:i, :], w_full[1:i, :], β) / i
+        β = β + eif(y_full[1:i], x_full[1:i, :], w_full[1:i, :], β) / (i^ξ)
     end
 
     return β
@@ -71,7 +71,7 @@ end
 # this method is for the ATE estimation
 function mp_sample_iv(
     y::AbstractVector, x::AbstractVecOrMat, z::AbstractVecOrMat,
-    β_init, eif::Function, N::Int
+    β_init, eif::Function, N::Int, ξ::Float64
 )
     n = length(y)
     y_full, x_full, z_full = Vector{eltype(y)}(undef, N), Matrix{eltype(x)}(undef, N, size(x, 2)), Matrix{eltype(z)}(undef, N, size(z, 2))
@@ -86,7 +86,7 @@ function mp_sample_iv(
         y_full[i], x_full[i, :], z_full[i, :] = y_full[new_idx], x_full[new_idx, :], z_full[new_idx, :]
 
         # update β estimate
-        β = β + eif(y_full[1:i], x_full[1:i, :], z_full[1:i, :], β) / i
+        β = β + eif(y_full[1:i], x_full[1:i, :], z_full[1:i, :], β) / (i^ξ)
     end
 
     return β
@@ -98,7 +98,7 @@ end
 function martingale_posterior(
     y::AbstractVector, x::AbstractVecOrMat;
     w::Union{Nothing, AbstractVecOrMat} = nothing, z::Union{Nothing, AbstractVecOrMat} = nothing,
-    N::Int = 5 * length(y), B::Int = 100
+    N::Int = 5 * length(y), B::Int = 100, ξ::Float64 = 1.0
 )
     # check if instruments are provided
     type = isnothing(z) ? "ATE" : "IV"
@@ -109,7 +109,7 @@ function martingale_posterior(
 
         # Run the Martingale posterior sampling
         results = ThreadsX.map(_ -> begin
-                                        mp_sample_ate(y, x, w, β_init, eif_ate, N)
+                                        mp_sample_ate(y, x, w, β_init, eif_ate, N, ξ)
                                     end, 1:B)
     elseif type == "IV"
         # initial estimate
@@ -117,7 +117,7 @@ function martingale_posterior(
 
         # Run the Martingale posterior sampling
         results = ThreadsX.map(_ -> begin
-                                        mp_sample_iv(y, x, z, β_init, eif_linear_iv, N)
+                                        mp_sample_iv(y, x, z, β_init, eif_linear_iv, N, ξ)
                                     end, 1:B)
     end
     return results
