@@ -7,17 +7,23 @@ using ThreadsX
 
 
 # efficient influence function for the linear iv model
-function eif_linear_iv(y, x, z, β)
+function eif_linear_iv(y, x, z, β; intercept = true)
     n = length(y)
 
-    X, Z = map(add_intercept, (x, z))
+    if intercept
+        X, Z = map(add_intercept, (x, z))
+    else
+        X, Z = x, z
+    end
 
     # estimate the ``fisher information'' on the previous n-1 observations
     fi_hat = sum([Z[j, :] * X[j, :]' for j in 1:n-1]) / (n-1)
 
     # compute the efficient influence function for the n-th observation
     eif = inv(fi_hat) * Z[n, :] * (y[n] - dot(X[n, :], β))
-    return eif
+
+    # In the scalar case return the scalar, otherwise return the vector
+    return eif isa AbstractVector && length(eif) == 1 ? eif[1] : eif
 end
 
 # efficient influence function for the ATE
@@ -47,7 +53,7 @@ end
 # this method is for the ATE estimation (including covariates W) 
 function mp_sample_ate(
     y::AbstractVector, x::AbstractVecOrMat, w::AbstractVecOrMat,
-    β_init, eif::Function, N::Int, ξ::Float64
+    β_init, N::Int, ξ::Float64
 )
     n = length(y)
     y_full, x_full, w_full = Vector{eltype(y)}(undef, N), Matrix{eltype(x)}(undef, N, size(x, 2)), Matrix{eltype(w)}(undef, N, size(w, 2))
@@ -62,16 +68,16 @@ function mp_sample_ate(
         y_full[i], x_full[i, :], w_full[i, :] = y_full[new_idx], x_full[new_idx, :], w_full[new_idx, :]
 
         # update β estimate
-        β = β + eif(y_full[1:i], x_full[1:i, :], w_full[1:i, :], β) / (i^ξ)
+        β = β + eif_ate(y_full[1:i], x_full[1:i, :], w_full[1:i, :], β) / (i^ξ)
     end
 
     return β
 end
 
-# this method is for the ATE estimation
+# method for IV estimation
 function mp_sample_iv(
     y::AbstractVector, x::AbstractVecOrMat, z::AbstractVecOrMat,
-    β_init, eif::Function, N::Int, ξ::Float64
+    β_init, N::Int, ξ::Float64
 )
     n = length(y)
     y_full, x_full, z_full = Vector{eltype(y)}(undef, N), Matrix{eltype(x)}(undef, N, size(x, 2)), Matrix{eltype(z)}(undef, N, size(z, 2))
@@ -86,7 +92,43 @@ function mp_sample_iv(
         y_full[i], x_full[i, :], z_full[i, :] = y_full[new_idx], x_full[new_idx, :], z_full[new_idx, :]
 
         # update β estimate
-        β = β + eif(y_full[1:i], x_full[1:i, :], z_full[1:i, :], β) / (i^ξ)
+        β = β + eif_linear_iv(y_full[1:i], x_full[1:i, :], z_full[1:i, :], β) / (i^ξ)
+    end
+
+    return β
+end
+
+# method for DDML IV estimation
+function mp_sample_ddml_iv(
+    y::AbstractVector, x::AbstractVecOrMat, z::AbstractVecOrMat, w::AbstractVecOrMat,
+    β_init, N::Int, ξ::Float64,
+    l::MondrianForest, r::MondrianForest, m::MondrianForest
+)
+    n = length(y)
+    y_full, x_full, z_full, w_full = Vector{eltype(y)}(undef, N), Matrix{eltype(x)}(undef, N, size(x, 2)), Matrix{eltype(z)}(undef, N, size(z, 2)), Matrix{eltype(w)}(undef, N, size(w, 2))
+    y_full[1:n] .= y
+    x_full[1:n, :] .= x
+    z_full[1:n, :] .= z
+
+    y_tilde, x_tilde, z_tilde = Vector{eltype(y)}(undef, N), Matrix{eltype(x)}(undef, N, size(x, 2)), Matrix{eltype(z)}(undef, N, size(z, 2))
+    y_tilde[1:n] .= [y[j] - mean(predict(l, w[j, :])) for j in 1:n]
+    x_tilde[1:n, :] .= [x[j, 1] - mean(predict(r, w[j, :])) for j in 1:n]
+    z_tilde[1:n, :] .= [z[j, 1] - mean(predict(m, w[j, :])) for j in 1:n]
+
+    β = β_init
+    for i in (n+1):N
+        # predict new observatio
+        new_idx = sample(1:(i-1), 1)[1]
+        y_full[i], x_full[i, :], z_full[i, :], w_full[i, :] = y_full[new_idx], x_full[new_idx, :], z_full[new_idx, :], w_full[new_idx, :]
+
+        # partial out covariates and update forests
+        y_tilde[i], x_tilde[i, 1], z_tilde[i, 1] = y_full[i] - mean(predict(l, w_full[i, :])), x_full[i, 1] - mean(predict(r, w_full[i, :])), z_full[i, 1] - mean(predict(m, w_full[i, :]))
+        extend!(l, w_full[i, :], y_full[i])
+        extend!(r, w_full[i, :], x_full[i, 1])
+        extend!(m, w_full[i, :], z_full[i, 1])
+
+        # update β estimate
+        β = β + eif_linear_iv(y_tilde[1:i], x_tilde[1:i, :], z_tilde[1:i, :], β; intercept = false) / (i^ξ)
     end
 
     return β
@@ -98,26 +140,34 @@ end
 function martingale_posterior(
     y::AbstractVector, x::AbstractVecOrMat;
     w::Union{Nothing, AbstractVecOrMat} = nothing, z::Union{Nothing, AbstractVecOrMat} = nothing,
-    N::Int = 5 * length(y), B::Int = 100, ξ::Float64 = 1.0
+    N::Int = 5 * length(y), B::Int = 100, ξ::Float64 = 1.0, num_trees::Int = 2
 )
     # check if instruments are provided
     type = isnothing(z) ? "ATE" : "IV"
+    if type == "IV" && !isnothing(w) # If both z and w are provided, we use DDML by default
+        type = "DDML"
+    end
 
     if type == "ATE"
-        # initial estimate
         β_init = or_ate(y, x, w)
 
-        # Run the Martingale posterior sampling
         results = ThreadsX.map(_ -> begin
-                                        mp_sample_ate(y, x, w, β_init, eif_ate, N, ξ)
+                                        mp_sample_ate(y, x, w, β_init, N, ξ)
                                     end, 1:B)
     elseif type == "IV"
-        # initial estimate
         β_init = tsls(y, x, z)
 
-        # Run the Martingale posterior sampling
         results = ThreadsX.map(_ -> begin
-                                        mp_sample_iv(y, x, z, β_init, eif_linear_iv, N, ξ)
+                                        mp_sample_iv(y, x, z, β_init, N, ξ)
+                                    end, 1:B)
+    elseif type == "DDML"
+        β_init = ddml(y, x, z, w)
+
+        l, r, m = (MondrianForest(y, w, 10, num_trees), MondrianForest(x[:, 1], w, 10, num_trees), MondrianForest(z[:, 1], w, 10, num_trees))
+
+        results = ThreadsX.map(_ -> begin
+                                        local_l, local_r, local_m = map(x -> deepcopy(x), (l, r, m))
+                                        mp_sample_ddml_iv(y, x, z, w, β_init, N, ξ, local_l, local_r, local_m)
                                     end, 1:B)
     end
     return results

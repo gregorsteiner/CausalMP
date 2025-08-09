@@ -13,15 +13,10 @@ y, x, z, W = (d.GDP, d.Exprop, d.logMort, Matrix(d[:, ["Latitude", "Africa", "As
 
 
 # run analysis
-N, B, num_trees, parallel = (200, 500, 5, true) # set the Martingale posterior parameters
+N, B, num_trees = (200, 10, 1) # set the Martingale posterior parameters
 Random.seed!(42)
 
-mp_tsls = martingale_posterior(y, x, z; W = W, N = N, B = B, num_trees = num_trees, parallel = parallel)
-
-mp_ddml_tsls = martingale_posterior(y, x, z; W = W, criterion = (y, x, z, W) -> ddml(y, x, z, W; iv = true), N = N, B = B, num_trees = num_trees, parallel = parallel)
-mp_ddml_ols = martingale_posterior(y, x, z; W = W, criterion = (y, x, z, W) -> ddml(y, x, z, W; iv = false), N = N, B = B, num_trees = num_trees, parallel = parallel)
-
-givbma_fit = givbma(y, x, [z W]; iter = 10000, g_prior = "hyper-g/n")
+mp_ddml = martingale_posterior(y, x; z = z, w = W, N = N, B = B, num_trees = num_trees)
 
 
 # plot results
