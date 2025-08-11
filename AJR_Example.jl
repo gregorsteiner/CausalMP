@@ -13,26 +13,23 @@ y, x, z, W = (d.GDP, d.Exprop, d.logMort, Matrix(d[:, ["Latitude", "Africa", "As
 
 
 # run analysis
-N, B, num_trees, parallel = (200, 500, 5, true) # set the Martingale posterior parameters
+N, B, num_trees = (300, 1000, 5) # set the Martingale posterior parameters
 Random.seed!(42)
 
-mp_tsls = martingale_posterior(y, x, z; W = W, N = N, B = B, num_trees = num_trees, parallel = parallel)
-
-mp_ddml_tsls = martingale_posterior(y, x, z; W = W, criterion = (y, x, z, W) -> ddml(y, x, z, W; iv = true), N = N, B = B, num_trees = num_trees, parallel = parallel)
-mp_ddml_ols = martingale_posterior(y, x, z; W = W, criterion = (y, x, z, W) -> ddml(y, x, z, W; iv = false), N = N, B = B, num_trees = num_trees, parallel = parallel)
-
-givbma_fit = givbma(y, x, [z W]; iter = 10000, g_prior = "hyper-g/n")
+mp_ddml = martingale_posterior(y, x; z = z, w = W, N = N, B = B, num_trees = num_trees)
+mp_tsls = martingale_posterior(y, [x W]; z = [z W], N = N, B = B)
 
 
 # plot results
 plt = density(
-    mp_ddml_tsls,
+    clamp.(mp_ddml, -0.5, 2.5),
     linewidth = 2,
-    label = "MP DDML (TSLS)", xlabel = "Effect of institutions on output", ylabel = "Posterior Density"
+    label = "MP DDML IV", xlabel = "Effect of institutions on output", ylabel = "Posterior Density"
 )
-density!(mp_ddml_ols, label = "MP DDML (OLS)", linewidth = 2)
-density!(clamp.(getindex.(mp_tsls, 2), -5, 5), label = "MP TSLS", linewidth = 2)
-plot!(rbw(givbma_fit), label = "gIVBMA", linewidth = 2)
+density!(
+    clamp.(getindex.(mp_tsls, 2), -0.5, 2.5),
+    label = "MP IV", linewidth = 2
+)
+xlims!(0.0, 2.0)
 
-xlims!(-1, 2.5)
 savefig(plt, "AJR_Results.pdf")
