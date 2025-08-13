@@ -12,7 +12,7 @@ function generate_data(dist, n; c = 1/2, tau = 1.0)
     δ, τ = (1.0, tau)
     
     z = rand(Uniform(0, 1), n)
-    if dist == "Linear"
+    if dist == "Gaussian"
         u = rand(MvNormal([0.0, 0.0], [1.0 c; c 1.0]), n)'
     elseif dist == "t"
         u = rand(MvTDist(3, [0.0, 0.0], [1.0 c; c 1.0]), n)'
@@ -27,7 +27,7 @@ end
 
 
 # Wrapper function that runs the simulation
-function run_simulation(dist::String, n::Int; M::Int = 100, N::Int = 4*n, B::Int = 100, true_value::Float64 = 1.0)
+function run_simulation(dist::String, n::Int; M::Int = 100, N::Int = 5*n, B::Int = 100, true_value::Float64 = 1.0)
     # Preallocate arrays
     methods = [
         L"\text{MP}~(\xi = 1)",
@@ -63,7 +63,7 @@ function run_simulation(dist::String, n::Int; M::Int = 100, N::Int = 4*n, B::Int
 end
 
 # run simulation
-result = map(run_simulation, ["t", "Cauchy", "t", "Cauchy"], [100, 100, 500, 500])
+result = map(run_simulation, ["Gaussian", "t"], [100, 100])
 print(result)
 
 # create table with results
