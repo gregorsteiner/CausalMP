@@ -22,8 +22,7 @@ function eif_linear_iv(y, x, z, β; intercept = true)
     # compute the efficient influence function for the n-th observation
     eif = inv(fi_hat) * Z[n, :] * (y[n] - dot(X[n, :], β))
 
-    # In the scalar case return the scalar, otherwise return the vector
-    return eif isa AbstractVector && length(eif) == 1 ? eif[1] : eif
+    return eif
 end
 
 # efficient influence function for the ATE
@@ -61,14 +60,16 @@ function mp_sample_ate(
     x_full[1:n, :] .= x
     w_full[1:n, :] .= w
 
-    β = β_init
+    β = zeros(length(β_init), N)
+    β[:, 1:n] = β_init
+
     for i in (n+1):N
         # predict new observatio
         new_idx = sample(1:(i-1), 1)[1]
         y_full[i], x_full[i, :], w_full[i, :] = y_full[new_idx], x_full[new_idx, :], w_full[new_idx, :]
 
         # update β estimate
-        β = β + eif_ate(y_full[1:i], x_full[1:i, :], w_full[1:i, :], β) / (i^ξ)
+        β[:, i] = β[:, i-1] + eif_ate(y_full[1:i], x_full[1:i, :], w_full[1:i, :], β[:, i-1]) / (i^ξ)
     end
 
     return β
@@ -85,14 +86,16 @@ function mp_sample_iv(
     x_full[1:n, :] .= x
     z_full[1:n, :] .= z
 
-    β = β_init
+    β = zeros(length(β_init), N)
+    β[:, 1:n] .= β_init
+
     for i in (n+1):N
         # predict new observatio
         new_idx = sample(1:(i-1), 1)[1]
         y_full[i], x_full[i, :], z_full[i, :] = y_full[new_idx], x_full[new_idx, :], z_full[new_idx, :]
 
         # update β estimate
-        β = β + eif_linear_iv(y_full[1:i], x_full[1:i, :], z_full[1:i, :], β) / (i^ξ)
+        β[:, i] = β[:, i-1] + eif_linear_iv(y_full[1:i], x_full[1:i, :], z_full[1:i, :], β[:, i-1]) / (i^ξ)
     end
 
     return β
@@ -115,7 +118,9 @@ function mp_sample_ddml_iv(
     x_tilde[1:n, :] .= [x[j, 1] - mean(predict(r, w[j, :])) for j in 1:n]
     z_tilde[1:n, :] .= [z[j, 1] - mean(predict(m, w[j, :])) for j in 1:n]
 
-    β = β_init
+    β = zeros(length(β_init), N)
+    β[:, 1:n] .= β_init
+
     for i in (n+1):N
         # predict new observatio
         new_idx = sample(1:(i-1), 1)[1]
@@ -128,7 +133,7 @@ function mp_sample_ddml_iv(
         extend!(m, w_full[i, :], z_full[i, 1])
 
         # update β estimate
-        β = β + eif_linear_iv(y_tilde[1:i], x_tilde[1:i, :], z_tilde[1:i, :], β; intercept = false) / (i^ξ)
+        β[:, i] = β[:, i-1] + eif_linear_iv(y_tilde[1:i], x_tilde[1:i, :], z_tilde[1:i, :], β[:, i-1]; intercept = false) / (i^ξ)
     end
 
     return β
@@ -171,4 +176,21 @@ function martingale_posterior(
                                     end, 1:B)
     end
     return results
+end
+
+
+# auxiliary function to extract the martingale posterior
+function extract_mp(object; idx = 1) # object is a vector of matrices, idx is the index of interest
+    N = size(object[1], 2)
+    mp = map(x -> x[idx, N], object)
+    return mp
+end
+
+# auxiliary function to create ``jellyfish'' plots
+function jellyfish_plot(object, n; idx = 1, colour = :blue, α = 1/2, label = "")
+    N = size(object[1], 2)
+    data = vcat(map(x -> x[idx:idx, :], object)...)'
+    p = plot(n:N, data[n:N, :], color = colour, alpha = α, label = false, xlabel = "Forward step i")
+    plot!(n:N, data[n:N, 1], color = colour, alpha = α, label = "")
+    return p
 end
