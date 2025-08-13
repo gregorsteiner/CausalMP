@@ -13,7 +13,7 @@ y, x, z, W = (d.GDP, d.Exprop, d.logMort, Matrix(d[:, ["Latitude", "Africa", "As
 
 
 # run analysis
-N, B, num_trees = (300, 100, 5) # set the Martingale posterior parameters
+N, B, num_trees = (500, 1000, 5) # set the Martingale posterior parameters
 Random.seed!(42)
 
 mp_ddml = martingale_posterior(y, x; z = z, w = W, N = N, B = B, num_trees = num_trees)
@@ -38,14 +38,9 @@ savefig(post_plt, "AJR_Results.pdf")
 cols = palette(:default)
 n = length(y)
 
-data_ddml = vcat(mp_ddml...)'
-plot_ddml = plot(n:N, data_ddml[n:N, :], color = cols[1], alpha=0.2, label = false)
-plot!(n:N, data_ddml[n:N, 1], color = cols[1], alpha=0.2, label = "MP DDML IV")
-
-data_tsls = vcat(map(x -> x[2:2, :], mp_tsls)...)'
-plot_tsls = plot(n:N, data_tsls[n:N, :], color = cols[2], alpha=0.2, label = false)
-plot!(n:N, data_tsls[n:N, 1], color = cols[2], alpha=0.2, label = "MP TSLS IV")
-
-
-plot(plot_ddml, plot_tsls, ylabel = "Effect of institutions on output")
+plot(
+    jellyfish_plot(mp_ddml, n; colour = cols[1], α = 0.2),
+    jellyfish_plot(mp_tsls, n; idx = 2, colour = cols[2], α = 0.2),
+    ylabel = "Effect of institutions on output"
+)
 ylims!(-3.0, 5.0)
