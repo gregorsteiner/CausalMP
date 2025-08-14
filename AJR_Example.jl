@@ -1,7 +1,7 @@
 
 using CSV, DataFrames, Random
 using gIVBMA
-using StatsPlots
+using StatsPlots, LaTeXStrings
 
 include("MartingalePosterior.jl")
 include("estimators.jl")
@@ -38,9 +38,10 @@ savefig(post_plt, "AJR_Results.pdf")
 cols = palette(:default)
 n = length(y)
 
-plot(
+jelly_plt = plot(
     jellyfish_plot(mp_ddml, n; colour = cols[1], α = 0.2),
     jellyfish_plot(mp_tsls, n; idx = 2, colour = cols[2], α = 0.2),
-    ylabel = "Effect of institutions on output"
+    ylabel = L"\theta_i"
 )
-ylims!(-3.0, 5.0)
+ylims!(-4.0, 6.0)
+savefig(jelly_plt, "AJR_Jellyfish.pdf")

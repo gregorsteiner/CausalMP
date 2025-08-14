@@ -4,7 +4,7 @@ include("estimators.jl")
 
 using InvertedIndices
 using ThreadsX
-
+using LaTeXStrings
 
 # efficient influence function for the linear iv model
 function eif_linear_iv(y, x, z, β; intercept = true)
@@ -187,10 +187,10 @@ function extract_mp(object; idx = 1) # object is a vector of matrices, idx is th
 end
 
 # auxiliary function to create ``jellyfish'' plots
-function jellyfish_plot(object, n; idx = 1, colour = :blue, α = 1/2, label = "")
+function jellyfish_plot(object, n; idx = 1, colour = :blue, α = 1/2)
     N = size(object[1], 2)
     data = vcat(map(x -> x[idx:idx, :], object)...)'
-    p = plot(n:N, data[n:N, :], color = colour, alpha = α, label = false, xlabel = "Forward step i")
+    p = plot(n:N, data[n:N, :], color = colour, alpha = α, label = false, xlabel = L"Forward step $i$")
     plot!(n:N, data[n:N, 1], color = colour, alpha = α, label = "")
     return p
 end
