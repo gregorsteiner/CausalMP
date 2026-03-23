@@ -33,7 +33,7 @@ function mp_late(y, x, z; N = 1000, B = 100)
     lates = zeros(B)
 
     D_orig = [y x z]
-    for b in 1:B
+    Threads.@threads for b in 1:B
         D_pred = bayes_bootstrap(D_orig, N)
         y_pred, x_pred, z_pred = D_pred[:, 1], D_pred[:, 2], D_pred[:, 3]
         probs[:, b] = response_type_prob(x_pred, z_pred)
@@ -42,12 +42,55 @@ function mp_late(y, x, z; N = 1000, B = 100)
     return lates, probs
 end
 
-y = [1, 0, 1, 1]
-x = [1, 0, 0, 1]
-z = [1, 0, 1, 0]
-res = mp_late(y, x, z; B = 500, N = 100)
+
+# Create the Sommer & Zeger Vitamin A study dataset
+using DataFrames
+data_counts = [
+    (0, 0, 0, 74),      # Assigned: No, Received: No, Outcome: Died
+    (0, 0, 1, 11514),   # Assigned: No, Received: No, Outcome: Survived
+    (1, 0, 0, 34),      # Assigned: Yes, Received: No, Outcome: Died
+    (1, 0, 1, 2385),    # Assigned: Yes, Received: No, Outcome: Survived
+    (1, 1, 0, 12),      # Assigned: Yes, Received: Yes, Outcome: Died
+    (1, 1, 1, 9663)     # Assigned: Yes, Received: Yes, Outcome: Survived
+]
+
+df = DataFrame(Z = Int[], X = Int[], Y = Int[])
+for (z, x, y, count) in data_counts
+    append!(df, DataFrame(Z = fill(z, count), X = fill(x, count), Y = fill(y, count)))
+end
+
+res = mp_late(df.Y, df.X, df.Z; B = 200, N = 50_000)
 
 
-using StatsPlots
-density(res[1])
-density(res[2])
+using StatsPlots, Measures
+default(
+    fontfamily="Computer Modern",
+    titlefontsize=11, 
+    guidefontsize=11, 
+    tickfontsize=9, 
+    legendfontsize=9,
+    tick_direction=:out,
+    frame=:axes, 
+    grid=false,
+    lw=1.5
+)
+
+p1 = density(
+    res[1] * 1000,
+    xlabel = "LATE", label = ""
+)
+
+p2 = density(
+    res[2][3, :],
+    xlabel = "Proportion of Compliers",
+    label = ""
+)
+
+
+final_plot = plot(
+    p1, p2,
+    size = (600, 300),
+    dpi = 300,
+    margins = 2mm
+)
+savefig(final_plot, "Sommer_Zeger_Results.pdf")
