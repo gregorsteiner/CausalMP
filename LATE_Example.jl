@@ -62,7 +62,7 @@ end
 res = mp_late(df.Y, df.X, df.Z; B = 200, N = 50_000)
 
 
-using StatsPlots, Measures
+using StatsPlots, Measures, LaTeXStrings
 default(
     fontfamily="Computer Modern",
     titlefontsize=11, 
@@ -76,14 +76,16 @@ default(
 )
 
 p1 = density(
-    res[1] * 1000,
-    xlabel = "LATE", label = ""
+    res[1] * 1000, # plot rate per 1000 individuals
+    xlabel = "LATE (per 1000)", label = "",
+    fill = true, fillalpha = 0.2
 )
 
 p2 = density(
     res[2][3, :],
     xlabel = "Proportion of Compliers",
-    label = ""
+    label = "",
+    fill = true, fillalpha = 0.2
 )
 
 
