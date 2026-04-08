@@ -94,15 +94,15 @@ qtes_05 = map((F1, F0) -> quantile_te(0.5, F1, F0), res_1.cdfs, res_0.cdfs)
 qtes_09 = map((F1, F0) -> quantile_te(0.9, F1, F0), res_1.cdfs, res_0.cdfs)
 
 p_qtes = density(
-    qtes_05,
-    label = "Median", ylabel = "Posterior Density",
-    xlabel = "Quantile Treatment Effect",
+    qtes_01,
+    label = "p = 0.1", ylabel = "Posterior Density",
+    xlabel = "QTE(p)",
     legend = :topleft
 )
-density!(p_qtes, qtes_01, label = "0.1-Quantile")
-density!(p_qtes, qtes_09, label = "0.9-Quantile")
+density!(p_qtes, qtes_05, label = "p = 0.5")
+density!(p_qtes, qtes_09, label = "p = 0.9")
 
 # combine plot
-p_final = plot(p, p_qtes, size = (600, 300))
-
+p_final = plot(p, p_qtes, size = (600, 300), margins = 2mm)
+savefig(p_final, "ZnAcetExample.pdf")
 
