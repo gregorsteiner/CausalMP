@@ -6,12 +6,18 @@ include("CopulaMartingalePosterior.jl")
 
 d = CSV.read("ZnAcet.csv", DataFrame)
 
-y_1, y_0 = d[d.Zinc .== 1, "Duration"], d[d.Zinc .== 0, "Duration"]
+y, x = d.Duration, d.Zinc
+#y_1, y_0 = d[d.Zinc .== 1, "Duration"], d[d.Zinc .== 0, "Duration"]
 
 
 # fit Martingale posterior densities
-res_1 = mp_density(y_1, 500, 200, Exponential(5); rho_candidates = 0.0:0.01:0.8)
-res_0 = mp_density(y_0, 500, 200, Exponential(5); rho_candidates = 0.0:0.01:0.8)
+res = mp_density(
+    y, x[:, :],
+    500, 200,
+    w -> Exponential(5.0),
+    0.8, [0.8]
+)
+
 
 # plots
 using StatsPlots, Measures, LaTeXStrings
@@ -27,7 +33,7 @@ default(
     lw=1.5
 )
 
-function calculate_posterior_stats(pdfs, x_grid)
+function calculate_posterior_stats(pdfs, x_grid, w)
     B = length(pdfs)
     nx = length(x_grid)
     
@@ -37,7 +43,7 @@ function calculate_posterior_stats(pdfs, x_grid)
     # Evaluate every PDF on the grid
     for b in 1:B
         for i in 1:nx
-            evaluations[i, b] = pdfs[b](x_grid[i])
+            evaluations[i, b] = pdfs[b](x_grid[i], w)
         end
     end
 
@@ -56,7 +62,7 @@ end
 # plot interventional densities
 xx = 0:0.1:20
 
-xx_f, mu, lb, ub = calculate_posterior_stats(res_1.pdfs, xx)
+xx_f, mu, lb, ub = calculate_posterior_stats(res.pdfs, xx, 1)
 p = plot(xx_f, mu, 
     ribbon=(mu .- lb, ub .- mu), 
     fillalpha=0.2, 
@@ -66,7 +72,7 @@ p = plot(xx_f, mu,
     )
 
 
-xx_f, mu, lb, ub = calculate_posterior_stats(res_0.pdfs, xx)
+xx_f, mu, lb, ub = calculate_posterior_stats(res.pdfs, xx, 0)
 plot!(p, xx_f, mu, 
       ribbon=(mu .- lb, ub .- mu), 
       fillalpha=0.2, 
@@ -78,20 +84,20 @@ p
 
 
 # plot quantile treatment effects
-function get_quantile(mc::MartingalePosteriorCDF, q; x_min=0.0, x_max=200.0)
-    target_func(x) = mc(x) - q
+function get_quantile(F, q; x_min=0.0, x_max=200.0)
+    target_func(x) = F(x) - q
     return find_zero(target_func, (x_min, x_max))
 end
 
-function quantile_te(q, F_1, F_0)
-    q_1 = get_quantile(F_1, q)
-    q_0 = get_quantile(F_0, q)
+function quantile_te(q, F)
+    q_1 = get_quantile(y -> F(y, 1), q)
+    q_0 = get_quantile(y -> F(y, 0), q)
     return q_1 - q_0
 end
 
-qtes_01 = map((F1, F0) -> quantile_te(0.1, F1, F0), res_1.cdfs, res_0.cdfs)
-qtes_05 = map((F1, F0) -> quantile_te(0.5, F1, F0), res_1.cdfs, res_0.cdfs)
-qtes_09 = map((F1, F0) -> quantile_te(0.9, F1, F0), res_1.cdfs, res_0.cdfs)
+qtes_01 = map(F -> quantile_te(0.1, F), res.cdfs)
+qtes_05 = map(F -> quantile_te(0.5, F), res.cdfs)
+qtes_09 = map(F -> quantile_te(0.9, F), res.cdfs)
 
 p_qtes = density(
     qtes_01,
