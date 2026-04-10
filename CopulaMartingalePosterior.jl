@@ -113,7 +113,24 @@ function fit_observed_data(y, W, ρ, ρ_x, P0)
     return v_obs, -log_score
 end
 
-# generate Bayesian bootstrap sample for covariates
+function find_best_rho(y, W, ρ_candidates, ρ_x, P0)
+    best_ρ = ρ_candidates[1]
+    best_v_obs, min_score = fit_observed_data(y, W, best_ρ, ρ_x, P0)
+
+    for i in 2:length(ρ_candidates)
+        current_ρ = ρ_candidates[i]
+        v_obs, score = fit_observed_data(y, W, current_ρ, ρ_x, P0)
+        
+        if score < min_score
+            min_score = score
+            best_ρ = current_ρ
+            best_v_obs = v_obs
+        end
+    end
+    
+    return best_ρ, best_v_obs, min_score
+end
+
 function bayes_bootstrap(W, N)
     n = size(W, 1)
     idx = collect(1:n)
@@ -124,11 +141,11 @@ function bayes_bootstrap(W, N)
     return W[idx, :]
 end
 
-function mp_density(y, W, N, B, P0, ρ, ρ_x)
+function mp_density(y, W, N, B, P0, ρ_candidates, ρ_x)
     n = length(y)
     α_seq = [(2 - 1/i) * (1/(i+1)) for i in 1:N]
     
-    v_obs, lps = fit_observed_data(y, W, ρ, ρ_x, P0)
+    best_ρ, v_obs, lps = find_best_rho(y, W, ρ_candidates, ρ_x, P0)
 
     p0 = (y, w) -> pdf(P0(w), y)
     F0 = (y, w) -> cdf(P0(w), y)
@@ -141,9 +158,39 @@ function mp_density(y, W, N, B, P0, ρ, ρ_x)
         v_full = [v_obs; v_sim]
         
         W_full = bayes_bootstrap(W, N)
-        pdfs[b] = MartingalePosteriorPDF(v_full, W_full, α_seq, ρ, ρ_x, p0, F0)
-        cdfs[b] = MartingalePosteriorCDF(v_full, W_full, α_seq, ρ, ρ_x, F0)
+        
+        pdfs[b] = MartingalePosteriorPDF(v_full, W_full, α_seq, best_ρ, ρ_x, p0, F0)
+        cdfs[b] = MartingalePosteriorCDF(v_full, W_full, α_seq, best_ρ, ρ_x, F0)
     end
 
-    return (pdfs = pdfs, cdfs = cdfs, lps = lps)
+    return (pdfs = pdfs, cdfs = cdfs, lps = lps, optimized_rho = best_ρ)
+end
+
+
+
+# Compute posterior of the density for plotting
+function calculate_posterior_stats(pdfs, x_grid, w)
+    B = length(pdfs)
+    nx = length(x_grid)
+    
+    # Pre-allocate a matrix: Rows = x-points, Cols = Simulations
+    evaluations = zeros(nx, B)
+    
+    # Evaluate every PDF on the grid
+    for b in 1:B
+        for i in 1:nx
+            evaluations[i, b] = pdfs[b](x_grid[i], w)
+        end
+    end
+
+    valid_indices = [all(isfinite.(evaluations[i, :])) for i in 1:nx]
+    filtered_x = x_grid[valid_indices]
+    filtered_evals = evaluations[valid_indices, :]
+    
+    # Calculate statistics across the columns (the B simulations)
+    post_mean = mean(filtered_evals, dims=2)[:]
+    lower_95  = [quantile(filtered_evals[i, :], 0.025) for i in 1:size(filtered_evals, 1)]
+    upper_95  = [quantile(filtered_evals[i, :], 0.975) for i in 1:size(filtered_evals, 1)]
+    
+    return filtered_x, post_mean, lower_95, upper_95
 end

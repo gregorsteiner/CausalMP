@@ -33,31 +33,6 @@ default(
     lw=1.5
 )
 
-function calculate_posterior_stats(pdfs, x_grid, w)
-    B = length(pdfs)
-    nx = length(x_grid)
-    
-    # Pre-allocate a matrix: Rows = x-points, Cols = Simulations
-    evaluations = zeros(nx, B)
-    
-    # Evaluate every PDF on the grid
-    for b in 1:B
-        for i in 1:nx
-            evaluations[i, b] = pdfs[b](x_grid[i], w)
-        end
-    end
-
-    valid_indices = [all(isfinite.(evaluations[i, :])) for i in 1:nx]
-    filtered_x = x_grid[valid_indices]
-    filtered_evals = evaluations[valid_indices, :]
-    
-    # Calculate statistics across the columns (the B simulations)
-    post_mean = mean(filtered_evals, dims=2)[:]
-    lower_95  = [quantile(filtered_evals[i, :], 0.025) for i in 1:size(filtered_evals, 1)]
-    upper_95  = [quantile(filtered_evals[i, :], 0.975) for i in 1:size(filtered_evals, 1)]
-    
-    return filtered_x, post_mean, lower_95, upper_95
-end
 
 # plot interventional densities
 xx = 0:0.1:20
