@@ -19,7 +19,6 @@ function generate_data(n)
 end
 
 
-
 include("CopulaMartingalePosterior.jl")
 
 
@@ -31,6 +30,37 @@ y, x, w = generate_data(100)
 N, B = 500, 100
 ρ_candidates, ρ_x = 0.25:0.05:0.95, [0.8, 0.8]
 res = mp_density(y, [x w], N, B, w -> Normal(0, 1), ρ_candidates, ρ_x)
+
+
+function marginalise_mp_pdf(y_grid, x_value, mp_results; qs = [0.025, 0.5, 0.975])
+    B = length(mp_results.pdfs)
+    N_total = size(mp_results.pdfs[1].W, 1)
+    n_y = length(y_grid)
+    
+    marginal_matrix = zeros(B, n_y)
+    
+    for b in 1:B
+        current_pdf_obj = mp_results.pdfs[b]
+        # The empirical covariate distribution for this bootstrap
+        W_sampled = current_pdf_obj.W 
+        
+        for (j, y) in enumerate(y_grid)
+            sum_val = 0.0
+            for i in 1:N_total
+                # Evaluate the conditional PDF at y given covariate i
+                sum_val += current_pdf_obj(y, [x_value; W_sampled[i, 2:end]])
+            end
+            marginal_matrix[b, j] = sum_val / N_total
+        end
+    end
+    
+    quantile_results = [quantile(marginal_samples[:, j], qs) for j in 1:n_y]
+    return quantile_results
+end
+
+
+res_1 = marginalise_mp_pdf(-1.2:0.02:2.2, 0, res)
+
 
 
 # dual learner

@@ -131,14 +131,13 @@ function find_best_rho(y, W, ρ_candidates, ρ_x, P0)
     return best_ρ, best_v_obs, min_score
 end
 
-function bayes_bootstrap(W, N)
-    n = size(W, 1)
+function bayes_bootstrap(n, N)
     idx = collect(1:n)
     for _ in (n+1):N
         idx_new = sample(idx)
         push!(idx, idx_new)
     end
-    return W[idx, :]
+    return idx
 end
 
 function mp_density(y, W, N, B, P0, ρ_candidates, ρ_x)
@@ -152,18 +151,20 @@ function mp_density(y, W, N, B, P0, ρ_candidates, ρ_x)
 
     pdfs = Vector{MartingalePosteriorPDF}(undef, B)
     cdfs = Vector{MartingalePosteriorCDF}(undef, B)
+    idx_W = Vector{Vector{Int64}}(undef, B)
     
     for b in 1:B
         v_sim = rand(Uniform(0, 1), N - n)
         v_full = [v_obs; v_sim]
         
-        W_full = bayes_bootstrap(W, N)
+        idx_W[b] = bayes_bootstrap(n, N)
+        W_full = W[idx_W[b], :]
         
         pdfs[b] = MartingalePosteriorPDF(v_full, W_full, α_seq, best_ρ, ρ_x, p0, F0)
         cdfs[b] = MartingalePosteriorCDF(v_full, W_full, α_seq, best_ρ, ρ_x, F0)
     end
 
-    return (pdfs = pdfs, cdfs = cdfs, lps = lps, optimized_rho = best_ρ)
+    return (pdfs = pdfs, cdfs = cdfs, lps = lps, optimized_rho = best_ρ, idx_W = idx_W)
 end
 
 
