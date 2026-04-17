@@ -107,7 +107,7 @@ def predictive_resample_single_loop_cregression(key,logcdf_conditionals,logpdf_j
     outputs,rng = mvcr.update_ptest_single_scan(inputs,rng)
     _,logcdf_conditionals,logpdf_joints,*_ = outputs
 
-    return logcdf_conditionals,logpdf_joints
+    return logcdf_conditionals,logpdf_joints,ind_new
 
 ## Vmap over multiple test points, then over multiple seeds
 predictive_resample_loop_cregression = jit(vmap(predictive_resample_single_loop_cregression,(None,0,0,None,0,None,None,None,None)),static_argnums = (7,8)) #vmap across y_test

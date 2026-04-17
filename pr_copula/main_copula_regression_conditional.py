@@ -113,12 +113,16 @@ def predictive_resample_cregression(copula_cregression_obj,x,y_test,x_test,B_pos
     n = jnp.shape(copula_cregression_obj.vn_perm)[1] #get original data size
     print('Predictive resampling...')
     start = time.time()
-    logcdf_conditionals_pr,logpdf_joints_pr = samp_mvcr.predictive_resample_loop_cregression_B(subkey,logcdf_conditionals,logpdf_joints,x,x_test,\
-                                                                                                copula_cregression_obj.rho_opt,copula_cregression_obj.rho_x_opt,n,T_fwdsamples)
+    logcdf_conditionals_pr,logpdf_joints_pr,ind_new_pr = samp_mvcr.predictive_resample_loop_cregression_B(
+        subkey,logcdf_conditionals,logpdf_joints,x,x_test,
+        copula_cregression_obj.rho_opt,copula_cregression_obj.rho_x_opt,n,T_fwdsamples)
+    # The sampled x indices are identical across test points for each predictive sequence,
+    # so we take the first test-point slice.
+    ind_new_pr = ind_new_pr[:,0,:]
     logcdf_conditionals_pr = logcdf_conditionals_pr.block_until_ready() #for accurate timing
     end = time.time()
     print('Predictive resampling time: {}s'.format(round(end-start, 3)))
-    return logcdf_conditionals_pr,logpdf_joints_pr
+    return logcdf_conditionals_pr,logpdf_joints_pr,ind_new_pr
 
 #Check convergence by running 1 long forward sample chain
 def check_convergence_pr_cregression(copula_cregression_obj,x,y_test,x_test,B_postsamples,T_fwdsamples = 10000, seed = 100):
