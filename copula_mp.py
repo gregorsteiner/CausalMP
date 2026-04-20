@@ -60,3 +60,63 @@ def mp_density(y, x, w, x_vals, y_grid, B_post, T_fwd, seed=42):
         }
     
     return results
+
+
+# compute marginal density stats for Y(x) at given x_vals, averaging over W
+# Fits separate models for each x_val using only observations where x == x_val
+def mp_density_t_learner(y, x, w, x_vals, y_grid, B_post, T_fwd, seed=42):
+    # Ensure x_vals is array-like
+    if np.isscalar(x_vals):
+        x_vals = np.array([x_vals])
+    else:
+        x_vals = np.asarray(x_vals)
+
+    results = {}
+    for i, x_val in enumerate(x_vals):
+        # Subset data for this x_val
+        mask = x == x_val
+        y_sub = y[mask]
+        x_sub = x[mask]
+        w_sub = w[mask]
+        Z_sub = np.column_stack((x_sub, w_sub))
+        y_sub_jnp, Z_sub_jnp = jnp.array(y_sub), jnp.array(Z_sub)
+
+        # Fit conditional copula regression on subset
+        fit = fit_copula_cregression(y_sub_jnp, Z_sub_jnp, single_x_bandwidth=False, n_perm_optim=10)
+        print(f"Optimised rho for x={x_val}: ", fit.rho_opt)
+        print(f"Optimised rho_x for x={x_val}: ", fit.rho_x_opt)
+        print(f"Prequential log-likelihood for x={x_val}: ", fit.preq_loglik)
+
+        # Unique w values for this subset
+        w_sub_unique = np.unique(w_sub)
+        w_sub_unique_jnp = jnp.array(w_sub_unique)
+        n_w = len(w_sub_unique)
+        n_y = len(y_grid)
+
+        # Build the test grid over y and unique w values for this x_val
+        y_target = jnp.tile(jnp.array(y_grid), n_w)
+        w_target = jnp.repeat(w_sub_unique_jnp, n_y)
+        x_target = jnp.full(n_w * n_y, x_val)
+        z_target = jnp.column_stack((x_target, w_target))
+
+        _, logpdf_pr, ind_new_pr = predictive_resample_cregression(
+            fit, Z_sub_jnp, y_target, z_target, B_post, T_fwd, seed=seed
+        )
+
+        logpdf_pr = jnp.squeeze(logpdf_pr)
+        pdfs = jnp.exp(logpdf_pr)
+        pdfs = pdfs.reshape(B_post, 1, n_w, n_y)
+
+        sampled_w = Z_sub_jnp[ind_new_pr, 1]
+        weights = jnp.equal(sampled_w[:, :, None], w_sub_unique_jnp[None, None, :]).sum(axis=1)
+        weights = weights / weights.sum(axis=1, keepdims=True)
+
+        # Compute marginal PDFs
+        marginal_pdfs = jnp.einsum('bw,bwy->by', weights, pdfs[:, 0, :, :])
+        results[f'x_{i}'] = {
+            'mean': np.array(jnp.mean(marginal_pdfs, axis=0)),
+            'low':  np.array(jnp.quantile(marginal_pdfs, 0.025, axis=0)),
+            'high': np.array(jnp.quantile(marginal_pdfs, 0.975, axis=0))
+        }
+    
+    return results
