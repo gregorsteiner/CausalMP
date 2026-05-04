@@ -4,7 +4,7 @@ using Roots
 
 include("CopulaMartingalePosterior.jl")
 
-d = CSV.read("ZnAcet.csv", DataFrame)
+d = CSV.read("Data/ZnAcet.csv", DataFrame)
 
 y, x = d.Duration, d.Zinc
 #y_1, y_0 = d[d.Zinc .== 1, "Duration"], d[d.Zinc .== 0, "Duration"]
