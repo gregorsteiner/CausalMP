@@ -32,109 +32,87 @@ from pr_copula import sample_copula_regression_functions as samp_mvcr
 
 
 
-### Instrumental variable approach to interventional density estimation for compliers ###
-# S-Learner approach: Fits single model on all data
-def mp_compliers(y, x, z, y_grid, B_post, T_fwd, seed=42):    
-    # Convert to jax arrays and stack x, z as covariates
+### Instrumental variable approach to binary outcome estimation for compliers ###
+# Uses Bayesian bootstrap directly on (y, x, z) triplets to estimate probabilities
+def mp_compliers(y, x, z, B_post, T_fwd, seed=42):    
+    """
+    Estimate P(Y(0)=1|C) and P(Y(1)=1|C) for compliers using Bayesian bootstrap.
+    
+    Parameters:
+    -----------
+    y : array-like
+        Binary outcome variable (0/1)
+    x : array-like
+        Binary treatment variable (0/1)
+    z : array-like
+        Binary instrument variable (0/1)
+    B_post : int
+        Number of Bayesian bootstrap samples
+    T_fwd : int
+        Number of forward samples
+    seed : int
+        Random seed
+    """
+    # Convert to numpy arrays
     y_arr = np.asarray(y)
     x_arr = np.asarray(x)
     z_arr = np.asarray(z)
     
-    # For S-Learner, use (x, z) as the predictor variables
-    xz = np.column_stack((x_arr, z_arr))
-    y_jnp = jnp.array(y_arr)
-    xz_jnp = jnp.array(xz)
+    n = len(y_arr)
     
-    # Fit conditional copula regression on full data
-    fit = fit_copula_cregression(y_jnp, xz_jnp, single_x_bandwidth=False, n_perm_optim=10)
-    print("Optimised rho: ", fit.rho_opt)
-    print("Optimised rho_x: ", fit.rho_x_opt)
-    print("Prequential log-likelihood: ", fit.preq_loglik)
+    # Initialize random number generator
+    rng = np.random.RandomState(seed)
     
-    # Compute response-type probabilities from observed data
-    # p_A = P(X=1|Z=0), p_N = P(X=0|Z=1), p_C = P(X=1|Z=1) - P(X=1|Z=0)
-    p_A = np.mean(x_arr[z_arr == 0])  # Prob treated when Z=0
-    p_N = 1.0 - np.mean(x_arr[z_arr == 1])  # Prob untreated when Z=1
-    p_C = np.mean(x_arr[z_arr == 1]) - np.mean(x_arr[z_arr == 0])  # Complier proportion
+    # Storage for posterior samples
+    prob_y0_samples = np.zeros(B_post)
+    prob_y1_samples = np.zeros(B_post)
+    complier_prob = np.zeros(B_post)
     
-    print(f"\nResponse-type probabilities:")
-    print(f"  p_A (Always-takers): {p_A:.4f}")
-    print(f"  p_N (Never-takers): {p_N:.4f}")
-    print(f"  p_C (Compliers): {p_C:.4f}")
+    print(f"\nRunning Bayesian bootstrap (B={B_post})...")
     
-    if p_C <= 0:
-        raise ValueError("Proportion of compliers is non-positive. Check data or assumptions.")
+    # Bayesian bootstrap loop
+    for b in range(B_post):
+        # Draw Dirichlet weights for this bootstrap sample
+        weights = rng.dirichlet(np.ones(n))
+        
+        # Resample (y, x, z) according to weights
+        # We use multinomial sampling to get indices
+        indices = rng.choice(n, size=n+T_fwd, p=weights)
+        y_boot = y_arr[indices]
+        x_boot = x_arr[indices]
+        z_boot = z_arr[indices]
+
+        # type probabilities
+        p_A = np.mean(x_boot[z_boot == 0])  # Prob treated when Z=0
+        p_N = 1.0 - np.mean(x_boot[z_boot == 1])  # Prob untreated when Z=1
+        p_C = np.mean(x_boot[z_boot == 1]) - np.mean(x_boot[z_boot == 0])  # Complier proportion
+
+        # Compute conditional probabilities from bootstrap sample
+        # P(Y=1|X=x, Z=z)
+        mask_x0_z0 = (x_boot == 0) & (z_boot == 0)
+        mask_x0_z1 = (x_boot == 0) & (z_boot == 1)
+        mask_x1_z0 = (x_boot == 1) & (z_boot == 0)
+        mask_x1_z1 = (x_boot == 1) & (z_boot == 1)
+        
+        # Compute probabilities with Laplace smoothing for empty cells
+        p_y1_x0_z0_b = np.mean(y_boot[mask_x0_z0])
+        p_y1_x0_z1_b = np.mean(y_boot[mask_x0_z1]) if p_N > 0 else 0
+        p_y1_x1_z0_b = np.mean(y_boot[mask_x1_z0]) if p_A > 0 else 0
+        p_y1_x1_z1_b = np.mean(y_boot[mask_x1_z1])
+        
+        prob_y0_b = (p_N + p_C / p_C) * p_y1_x0_z0_b - p_N / p_C * p_y1_x0_z1_b
+        prob_y1_b = (p_A + p_C / p_C) * p_y1_x1_z1_b - p_A / p_C * p_y1_x1_z0_b
+        
+        # Ensure probabilities are in [0, 1]
+        prob_y0_samples[b] = np.clip(prob_y0_b, 0, 1)
+        prob_y1_samples[b] = np.clip(prob_y1_b, 0, 1)
+        complier_prob[b] = np.clip(p_C, 0, 1)
     
-    n_y = len(y_grid)
-    
-    # Create grids for four conditional densities needed:
-    # p(y|X=0, Z=0), p(y|X=0, Z=1), p(y|X=1, Z=0), p(y|X=1, Z=1)
-    y_target_list = []
-    xz_target_list = []
-    n_grids = 4
-    
-    for x_val in [0, 1]:
-        for z_val in [0, 1]:
-            y_target_list.append(jnp.array(y_grid))
-            xz_target_list.append(np.full((n_y, 2), [x_val, z_val]))
-    
-    y_target = jnp.concatenate(y_target_list)
-    xz_target = jnp.array(np.vstack(xz_target_list))
-    
-    # Get predictive samples for all four conditional densities
-    _, logpdf_pr, ind_new_pr = predictive_resample_cregression(
-        fit, xz_jnp, y_target, xz_target, B_post, T_fwd, seed=seed
-    )
-    
-    logpdf_pr = jnp.squeeze(logpdf_pr)
-    pdfs = jnp.exp(logpdf_pr)
-    pdfs = pdfs.reshape(B_post, n_grids, n_y)
-    
-    # Extract the four conditional densities
-    pdf_y0_z0 = pdfs[:, 0, :]  # p(y|X=0, Z=0)
-    pdf_y0_z1 = pdfs[:, 1, :]  # p(y|X=0, Z=1)
-    pdf_y1_z0 = pdfs[:, 2, :]  # p(y|X=1, Z=0)
-    pdf_y1_z1 = pdfs[:, 3, :]  # p(y|X=1, Z=1)
-    
-    coef_z0_x0 = (p_N + p_C) / p_C  # Coefficient for p(y|X=0, Z=0)
-    coef_z1_x0 = -p_N / p_C         # Coefficient for p(y|X=0, Z=1)
-    
-    coef_z1_x1 = (p_A + p_C) / p_C  # Coefficient for p(y|X=1, Z=1)
-    coef_z0_x1 = -p_A / p_C         # Coefficient for p(y|X=1, Z=0)
-    
-    # Compute posterior distributions for interventional densities
-    p_y0_given_C = coef_z0_x0 * pdf_y0_z0 + coef_z1_x0 * pdf_y0_z1
-    p_y1_given_C = coef_z1_x1 * pdf_y1_z1 + coef_z0_x1 * pdf_y1_z0
-    
-    # Ensure non-negative densities (due to numerical issues)
-    p_y0_given_C = jnp.maximum(p_y0_given_C, 0)
-    p_y1_given_C = jnp.maximum(p_y1_given_C, 0)
-    
-    # Renormalize to ensure they integrate to 1
-    # (assuming y_grid has uniform spacing)
-    if len(y_grid) > 1:
-        dy = y_grid[1] - y_grid[0]
-    else:
-        dy = 1.0
-    
-    integral_y0 = jnp.sum(p_y0_given_C, axis=1, keepdims=True) * dy
-    integral_y1 = jnp.sum(p_y1_given_C, axis=1, keepdims=True) * dy
-    
-    p_y0_given_C = p_y0_given_C / (integral_y0 + 1e-10)
-    p_y1_given_C = p_y1_given_C / (integral_y1 + 1e-10)
-    
-    # Compute quantiles across posterior samples
+    # Compute quantiles and means across posterior samples
     results = {
-        'y_0_given_C': {
-            'mean': np.array(jnp.mean(p_y0_given_C, axis=0)),
-            'low': np.array(jnp.quantile(p_y0_given_C, 0.025, axis=0)),
-            'high': np.array(jnp.quantile(p_y0_given_C, 0.975, axis=0))
-        },
-        'y_1_given_C': {
-            'mean': np.array(jnp.mean(p_y1_given_C, axis=0)),
-            'low': np.array(jnp.quantile(p_y1_given_C, 0.025, axis=0)),
-            'high': np.array(jnp.quantile(p_y1_given_C, 0.975, axis=0))
-        }
+        'Control': prob_y0_samples,
+        'Treatment': prob_y1_samples,
+        'Complier': complier_prob
     }
     
     return results
