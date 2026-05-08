@@ -29,7 +29,18 @@ from pr_copula import copula_regression_functions as mvcr
 from pr_copula import sample_copula_regression_functions as samp_mvcr
 
 
-
+# Auxiliary Bayesian bootstrap function that returns indices for a bootstrap sample
+def bayesian_bootstrap(n, T_fwd, rng):
+    # Polya urn is exactly equivalent to Dirichlet(ones) weights
+    # sampled once — this is the vectorised form
+    counts = rng.dirichlet(np.ones(n))
+    
+    base_indices = np.arange(n)
+    extra_indices = rng.choice(n, size=T_fwd, p=counts)
+    
+    indices = np.concatenate([base_indices, extra_indices])
+    
+    return indices
 
 
 ### Instrumental variable approach to binary outcome estimation for compliers ###
@@ -68,16 +79,10 @@ def mp_compliers(y, x, z, B_post, T_fwd, seed=42):
     prob_y1_samples = np.zeros(B_post)
     complier_prob = np.zeros(B_post)
     
-    print(f"\nRunning Bayesian bootstrap (B={B_post})...")
-    
     # Bayesian bootstrap loop
     for b in range(B_post):
-        # Draw Dirichlet weights for this bootstrap sample
-        weights = rng.dirichlet(np.ones(n))
-        
-        # Resample (y, x, z) according to weights
-        # We use multinomial sampling to get indices
-        indices = rng.choice(n, size=n+T_fwd, p=weights)
+        # Resample (y, x, z) according to the Bayesian bootstrap
+        indices = bayesian_bootstrap(n, T_fwd, rng)
         y_boot = y_arr[indices]
         x_boot = x_arr[indices]
         z_boot = z_arr[indices]
@@ -85,7 +90,7 @@ def mp_compliers(y, x, z, B_post, T_fwd, seed=42):
         # type probabilities
         p_A = np.mean(x_boot[z_boot == 0])  # Prob treated when Z=0
         p_N = 1.0 - np.mean(x_boot[z_boot == 1])  # Prob untreated when Z=1
-        p_C = np.mean(x_boot[z_boot == 1]) - np.mean(x_boot[z_boot == 0])  # Complier proportion
+        p_C = (1 - p_A - p_N)
 
         # Compute conditional probabilities from bootstrap sample
         # P(Y=1|X=x, Z=z)
@@ -94,14 +99,14 @@ def mp_compliers(y, x, z, B_post, T_fwd, seed=42):
         mask_x1_z0 = (x_boot == 1) & (z_boot == 0)
         mask_x1_z1 = (x_boot == 1) & (z_boot == 1)
         
-        # Compute probabilities with Laplace smoothing for empty cells
+        # Compute probabilities
         p_y1_x0_z0_b = np.mean(y_boot[mask_x0_z0])
         p_y1_x0_z1_b = np.mean(y_boot[mask_x0_z1]) if p_N > 0 else 0
         p_y1_x1_z0_b = np.mean(y_boot[mask_x1_z0]) if p_A > 0 else 0
         p_y1_x1_z1_b = np.mean(y_boot[mask_x1_z1])
         
-        prob_y0_b = (p_N + p_C / p_C) * p_y1_x0_z0_b - p_N / p_C * p_y1_x0_z1_b
-        prob_y1_b = (p_A + p_C / p_C) * p_y1_x1_z1_b - p_A / p_C * p_y1_x1_z0_b
+        prob_y0_b = ((p_N + p_C) / p_C) * p_y1_x0_z0_b - p_N / p_C * p_y1_x0_z1_b
+        prob_y1_b = ((p_A + p_C) / p_C) * p_y1_x1_z1_b - p_A / p_C * p_y1_x1_z0_b
         
         # Ensure probabilities are in [0, 1]
         prob_y0_samples[b] = np.clip(prob_y0_b, 0, 1)
