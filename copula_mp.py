@@ -10,6 +10,9 @@ from pr_copula.main_copula_regression_conditional import fit_copula_cregression,
 # compute marginal density stats for Y(x) at given x_vals, averaging over W
 def mp_density(y, x, w, x_vals, y_grid, B_post, T_fwd, seed=42):
     # stack treatment and covariates
+    w = np.asarray(w)
+    if w.ndim == 1:
+        w = w.reshape(-1, 1)
     Z = np.column_stack((x, w))
     y_jnp, Z_jnp = jnp.array(y), jnp.array(Z)
 
@@ -25,17 +28,19 @@ def mp_density(y, x, w, x_vals, y_grid, B_post, T_fwd, seed=42):
     else:
         x_vals = np.asarray(x_vals)
 
-    # Build the test grid over y, all unique w values, and all x values
-    w_unique_jnp = jnp.array(np.unique(w))
+    # Build the test grid over y, all unique w rows, and all x values
+    w_unique = np.unique(w, axis=0)
+    w_unique_jnp = jnp.array(w_unique)
     n_w = len(w_unique_jnp)
     n_x = len(x_vals)
     n_y = len(y_grid)
     
-    # Create grid with all combinations of x_vals, w_unique, and y_grid
+    # Create grid with all combinations of x_vals, w_unique rows, and y_grid
     y_target = jnp.tile(jnp.array(y_grid), n_w * n_x)
-    w_target = jnp.tile(jnp.repeat(w_unique_jnp, n_y), n_x)
+    w_target = jnp.tile(jnp.repeat(w_unique_jnp, n_y, axis=0), (n_x, 1))
     x_target = jnp.repeat(jnp.array(x_vals), n_w * n_y)
-    z_target = jnp.column_stack((x_target, w_target))
+    x_target = x_target[:, None]
+    z_target = jnp.concatenate((x_target, w_target), axis=1)
 
     _, logpdf_pr, ind_new_pr = predictive_resample_cregression(
         fit, Z, y_target, z_target, B_post, T_fwd, seed=seed
@@ -45,8 +50,8 @@ def mp_density(y, x, w, x_vals, y_grid, B_post, T_fwd, seed=42):
     pdfs = jnp.exp(logpdf_pr)
     pdfs = pdfs.reshape(B_post, n_x, n_w, n_y)
 
-    sampled_w = Z_jnp[ind_new_pr, 1]
-    weights = jnp.equal(sampled_w[:, :, None], w_unique_jnp[None, None, :]).sum(axis=1)
+    sampled_w = Z_jnp[ind_new_pr, 1:]
+    weights = jnp.all(sampled_w[:, :, None, :] == w_unique_jnp[None, None, :, :], axis=-1).sum(axis=1)
     weights = weights / weights.sum(axis=1, keepdims=True)
 
     # Compute marginal PDFs for each x value
@@ -87,17 +92,21 @@ def mp_density_t_learner(y, x, w, x_vals, y_grid, B_post, T_fwd, seed=42):
         print(f"Optimised rho_x for x={x_val}: ", fit.rho_x_opt)
         print(f"Prequential log-likelihood for x={x_val}: ", fit.preq_loglik)
 
-        # Unique w values for this subset
-        w_sub_unique = np.unique(w_sub)
+        # Unique w rows for this subset
+        w_sub = np.asarray(w_sub)
+        if w_sub.ndim == 1:
+            w_sub = w_sub.reshape(-1, 1)
+        w_sub_unique = np.unique(w_sub, axis=0)
         w_sub_unique_jnp = jnp.array(w_sub_unique)
-        n_w = len(w_sub_unique)
+        n_w = len(w_sub_unique_jnp)
         n_y = len(y_grid)
 
-        # Build the test grid over y and unique w values for this x_val
+        # Build the test grid over y and unique w rows for this x_val
         y_target = jnp.tile(jnp.array(y_grid), n_w)
-        w_target = jnp.repeat(w_sub_unique_jnp, n_y)
-        x_target = jnp.full(n_w * n_y, x_val)
-        z_target = jnp.column_stack((x_target, w_target))
+        w_target = jnp.repeat(w_sub_unique_jnp, n_y, axis=0)
+        x_target = np.full(n_w * n_y, x_val)
+        x_target = x_target[:, None]
+        z_target = jnp.concatenate((x_target, w_target), axis=1)
 
         _, logpdf_pr, ind_new_pr = predictive_resample_cregression(
             fit, Z_sub_jnp, y_target, z_target, B_post, T_fwd, seed=seed
@@ -107,8 +116,8 @@ def mp_density_t_learner(y, x, w, x_vals, y_grid, B_post, T_fwd, seed=42):
         pdfs = jnp.exp(logpdf_pr)
         pdfs = pdfs.reshape(B_post, 1, n_w, n_y)
 
-        sampled_w = Z_sub_jnp[ind_new_pr, 1]
-        weights = jnp.equal(sampled_w[:, :, None], w_sub_unique_jnp[None, None, :]).sum(axis=1)
+        sampled_w = Z_sub_jnp[ind_new_pr, 1:]
+        weights = jnp.all(sampled_w[:, :, None, :] == w_sub_unique_jnp[None, None, :, :], axis=-1).sum(axis=1)
         weights = weights / weights.sum(axis=1, keepdims=True)
 
         # Compute marginal PDFs
