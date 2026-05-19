@@ -67,6 +67,69 @@ def mp_density(y, x, w, x_vals, y_grid, B_post, T_fwd, seed=42):
     return results
 
 
+# estimate ATT counterfactual density p(y(0) | X=1) using the martingale posterior
+# The control counterfactual is estimated by averaging p(y | X=0, W=w) over the covariate
+# distribution in the treated group using resampled treated covariates.
+def mp_density_att(y, x, w, y_grid, B_post, T_fwd, seed=42):
+    w = np.asarray(w)
+    if w.ndim == 1:
+        w = w.reshape(-1, 1)
+
+    x = np.asarray(x)
+    if np.sum(x == 1) == 0:
+        raise ValueError("mp_density_att requires at least one treated observation with x==1")
+    if np.sum(x == 0) == 0:
+        raise ValueError("mp_density_att requires at least one control observation with x==0")
+
+    Z = np.column_stack((x, w))
+    y_jnp, Z_jnp = jnp.array(y), jnp.array(Z)
+
+    # fit conditional copula regression on the full sample
+    fit = fit_copula_cregression(y_jnp, Z_jnp, single_x_bandwidth=False, n_perm_optim=10)
+    print("Optimised rho: ", fit.rho_opt)
+    print("Optimised rho_x: ", fit.rho_x_opt)
+    print("Prequential log-likelihhod: ", fit.preq_loglik)
+
+    # use the treated-group covariate distribution for the ATT target
+    w_treated = w[x == 1]
+    w_treated_unique = np.unique(w_treated, axis=0)
+    w_treated_unique_jnp = jnp.array(w_treated_unique)
+
+    n_w = len(w_treated_unique_jnp)
+    n_y = len(y_grid)
+
+    y_target = jnp.tile(jnp.array(y_grid), n_w)
+    w_target = jnp.repeat(w_treated_unique_jnp, n_y, axis=0)
+    x_target = jnp.zeros(n_w * n_y)[:, None]
+    z_target = jnp.concatenate((x_target, w_target), axis=1)
+
+    _, logpdf_pr, ind_new_pr = predictive_resample_cregression(
+        fit, Z, y_target, z_target, B_post, T_fwd, seed=seed
+    )
+
+    logpdf_pr = jnp.squeeze(logpdf_pr)
+    pdfs = jnp.exp(logpdf_pr)
+    pdfs = pdfs.reshape(B_post, 1, n_w, n_y)
+
+    sampled_x = Z_jnp[ind_new_pr, 0]
+    sampled_w = Z_jnp[ind_new_pr, 1:]
+
+    treated_mask = sampled_x == 1
+    matched = jnp.all(sampled_w[:, :, None, :] == w_treated_unique_jnp[None, None, :, :], axis=-1)
+    weights = jnp.sum(matched & treated_mask[:, :, None], axis=1)
+    weights_sum = weights.sum(axis=1, keepdims=True)
+    weights = jnp.where(weights_sum == 0, jnp.ones_like(weights) / n_w, weights / weights_sum)
+
+    marginal_pdfs = jnp.einsum('bw,bwy->by', weights, pdfs[:, 0, :, :])
+    return {
+        'x_0': {
+            'mean': np.array(jnp.mean(marginal_pdfs, axis=0)),
+            'low':  np.array(jnp.quantile(marginal_pdfs, 0.025, axis=0)),
+            'high': np.array(jnp.quantile(marginal_pdfs, 0.975, axis=0))
+        }
+    }
+
+
 # compute marginal density stats for Y(x) at given x_vals, averaging over W
 # Fits separate models for each x_val using only observations where x == x_val
 def mp_density_t_learner(y, x, w, x_vals, y_grid, B_post, T_fwd, seed=42):
