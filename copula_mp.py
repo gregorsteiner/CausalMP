@@ -98,9 +98,10 @@ def mp_density_att(y, x, w, y_grid, B_post, T_fwd, seed=42):
     n_w = len(w_treated_unique_jnp)
     n_y = len(y_grid)
 
-    y_target = jnp.tile(jnp.array(y_grid), n_w)
-    w_target = jnp.repeat(w_treated_unique_jnp, n_y, axis=0)
-    x_target = jnp.zeros(n_w * n_y)[:, None]
+    x_vals = jnp.array([0, 1])
+    y_target = jnp.tile(jnp.array(y_grid), n_w * len(x_vals))
+    w_target = jnp.tile(jnp.repeat(w_treated_unique_jnp, n_y, axis=0), (len(x_vals), 1))
+    x_target = jnp.repeat(x_vals, n_w * n_y)[:, None]
     z_target = jnp.concatenate((x_target, w_target), axis=1)
 
     _, logpdf_pr, ind_new_pr = predictive_resample_cregression(
@@ -109,7 +110,7 @@ def mp_density_att(y, x, w, y_grid, B_post, T_fwd, seed=42):
 
     logpdf_pr = jnp.squeeze(logpdf_pr)
     pdfs = jnp.exp(logpdf_pr)
-    pdfs = pdfs.reshape(B_post, 1, n_w, n_y)
+    pdfs = pdfs.reshape(B_post, len(x_vals), n_w, n_y)
 
     sampled_x = Z_jnp[ind_new_pr, 0]
     sampled_w = Z_jnp[ind_new_pr, 1:]
@@ -120,14 +121,17 @@ def mp_density_att(y, x, w, y_grid, B_post, T_fwd, seed=42):
     weights_sum = weights.sum(axis=1, keepdims=True)
     weights = jnp.where(weights_sum == 0, jnp.ones_like(weights) / n_w, weights / weights_sum)
 
-    marginal_pdfs = jnp.einsum('bw,bwy->by', weights, pdfs[:, 0, :, :])
-    return {
-        'x_0': {
-            'mean': np.array(jnp.mean(marginal_pdfs, axis=0)),
-            'low':  np.array(jnp.quantile(marginal_pdfs, 0.025, axis=0)),
-            'high': np.array(jnp.quantile(marginal_pdfs, 0.975, axis=0))
+    marginal_pdfs = jnp.einsum('bw,bxwy->bxy', weights, pdfs)
+
+    results = {}
+    for i, x_val in enumerate([0, 1]):
+        results[f'x_{x_val}'] = {
+            'mean': np.array(jnp.mean(marginal_pdfs[:, i, :], axis=0)),
+            'low':  np.array(jnp.quantile(marginal_pdfs[:, i, :], 0.025, axis=0)),
+            'high': np.array(jnp.quantile(marginal_pdfs[:, i, :], 0.975, axis=0))
         }
-    }
+
+    return results
 
 
 # compute marginal density stats for Y(x) at given x_vals, averaging over W
