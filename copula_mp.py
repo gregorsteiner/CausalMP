@@ -2,6 +2,7 @@
 import jax.numpy as jnp
 import pandas as pd
 import numpy as np
+import statsmodels.api as sm
 
 #import copula functions
 from pr_copula.main_copula_regression_conditional import fit_copula_cregression,predict_copula_cregression,predictive_resample_cregression,check_convergence_pr_cregression
@@ -67,6 +68,38 @@ def mp_density(y, x, w, x_vals, y_grid, B_post, T_fwd, seed=42):
     return results
 
 
+def fit_propensity_scores(Z, ind_new_pr):
+    """Fit logistic regression of X on W for each resampled predictive sequence and
+    predict propensity scores P(X=1|W) for all original training observations.
+
+    Parameters
+    ----------
+    Z : np.ndarray, shape (n, 1 + p)
+        Original data — first column is treatment x, remaining columns are covariates w.
+    ind_new_pr : np.ndarray, shape (B_post, T)
+        Resampled observation indices for each posterior sample.
+
+    Returns
+    -------
+    prop_scores : np.ndarray, shape (B_post, n)
+    """
+    Z = np.asarray(Z)
+    ind_new_pr = np.asarray(ind_new_pr)
+    n = Z.shape[0]
+    B_post = ind_new_pr.shape[0]
+    w_orig = sm.add_constant(Z[:, 1:], has_constant='add')
+    prop_scores = np.zeros((B_post, n))
+
+    for b in range(B_post):
+        Z_resamp = Z[ind_new_pr[b]]
+        x_resamp = Z_resamp[:, 0]
+        w_resamp = sm.add_constant(Z_resamp[:, 1:], has_constant='add')
+        logit = sm.Logit(x_resamp, w_resamp).fit(disp=False)
+        prop_scores[b] = logit.predict(w_orig)
+
+    return prop_scores
+
+
 # estimate ATT counterfactual density p(y(0) | X=1) using the martingale posterior
 # The control counterfactual is estimated by averaging p(y | X=0, W=w) over the covariate
 # distribution in the treated group using resampled treated covariates.
@@ -130,6 +163,9 @@ def mp_density_att(y, x, w, y_grid, B_post, T_fwd, seed=42):
             'low':  np.array(jnp.quantile(marginal_pdfs[:, i, :], 0.025, axis=0)),
             'high': np.array(jnp.quantile(marginal_pdfs[:, i, :], 0.975, axis=0))
         }
+
+    prop_scores = fit_propensity_scores(Z, np.asarray(ind_new_pr))
+    results['propensity_scores'] = prop_scores  # shape (B_post, n)
 
     return results
 
