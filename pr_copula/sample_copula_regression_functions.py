@@ -114,6 +114,32 @@ predictive_resample_loop_cregression = jit(vmap(predictive_resample_single_loop_
 predictive_resample_loop_cregression_B =jit(vmap(predictive_resample_loop_cregression,(0,None,None,None,None,None,None,None,None)),static_argnums = (7,8)) #vmap across B posterior samples
 #### ####
 
+#### Variant taking presampled covariate sequences (e.g. logistic-NG resampled x together with BB resampled w) ####
+# Identical forward loop, but uses a fully presampled covariate sequence x_samp (shape (n+T,d))
+# instead of drawing new rows via the Bayesian bootstrap internally.
+@partial(jit,static_argnums = (7,8))
+def predictive_resample_single_loop_cregression_presampled(key,logcdf_conditionals,logpdf_joints,x_samp,x_test,rho,rho_x,n,T):
+
+    #generate uniform random numbers
+    key, subkey = random.split(key) #split key
+    a_rand = random.uniform(subkey,shape = (T,1))
+
+    #Append a_rand to empty vn (for correct array size)
+    vT = jnp.concatenate((jnp.zeros((n,1)),a_rand),axis = 0)
+
+    #run forward loop over presampled covariate sequence
+    inputs = vT,logcdf_conditionals,logpdf_joints,x_samp,x_test,rho,rho_x
+    rng = jnp.arange(n,n+T)
+    outputs,rng = mvcr.update_ptest_single_scan(inputs,rng)
+    _,logcdf_conditionals,logpdf_joints,*_ = outputs
+
+    return logcdf_conditionals,logpdf_joints
+
+## Vmap over multiple test points, then over multiple seeds/presampled sequences
+predictive_resample_loop_cregression_presampled = jit(vmap(predictive_resample_single_loop_cregression_presampled,(None,0,0,None,0,None,None,None,None)),static_argnums = (7,8)) #vmap across y_test
+predictive_resample_loop_cregression_presampled_B = jit(vmap(predictive_resample_loop_cregression_presampled,(0,None,None,0,None,None,None,None,None)),static_argnums = (7,8)) #vmap across B posterior samples (key and presampled sequence both vary)
+#### ####
+
 #### Convergence checks ####
 
 # Update p(y|x) in forward sampling, while keeping a track of change in p(y|x) for convergence check

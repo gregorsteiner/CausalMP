@@ -124,6 +124,30 @@ def predictive_resample_cregression(copula_cregression_obj,x,y_test,x_test,B_pos
     print('Predictive resampling time: {}s'.format(round(end-start, 3)))
     return logcdf_conditionals_pr,logpdf_joints_pr,ind_new_pr
 
+#Forward sample using fully presampled covariate sequences (e.g. logistic-NG resampled x with BB resampled w)
+#instead of drawing new covariate rows via the Bayesian bootstrap internally.
+#x_samp must have shape (B_postsamples, n + T_fwdsamples, d), one presampled sequence per posterior sample.
+def predictive_resample_cregression_presampled(copula_cregression_obj,x_samp,y_test,x_test,B_postsamples,T_fwdsamples = 5000, seed = 100):
+    #Fit permutation averaged cdf/pdf
+    logcdf_conditionals,logpdf_joints = predict_copula_cregression(copula_cregression_obj,y_test,x_test)
+
+    #Initialize random seeds
+    key = PRNGKey(seed)
+    key,*subkey = split(key,B_postsamples+1)
+    subkey = jnp.array(subkey)
+
+    #Forward sample
+    n = jnp.shape(copula_cregression_obj.vn_perm)[1] #get original data size
+    print('Predictive resampling...')
+    start = time.time()
+    logcdf_conditionals_pr,logpdf_joints_pr = samp_mvcr.predictive_resample_loop_cregression_presampled_B(
+        subkey,logcdf_conditionals,logpdf_joints,x_samp,x_test,
+        copula_cregression_obj.rho_opt,copula_cregression_obj.rho_x_opt,n,T_fwdsamples)
+    logcdf_conditionals_pr = logcdf_conditionals_pr.block_until_ready() #for accurate timing
+    end = time.time()
+    print('Predictive resampling time: {}s'.format(round(end-start, 3)))
+    return logcdf_conditionals_pr,logpdf_joints_pr
+
 #Check convergence by running 1 long forward sample chain
 def check_convergence_pr_cregression(copula_cregression_obj,x,y_test,x_test,B_postsamples,T_fwdsamples = 10000, seed = 100):
     #Fit permutation averaged cdf/pdf
