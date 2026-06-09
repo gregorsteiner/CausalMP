@@ -13,10 +13,11 @@ from pr_copula.main_copula_regression_conditional import fit_copula_cregression,
 
 
 ### Logistic regression score and Fisher information ###
-# Score (gradient of the log-likelihood) for a single Bernoulli observation
+# Score (gradient of the log-likelihood) summed over observations.
+# w_aug may be a single row (p+1,) or a matrix (n, p+1); x is scalar or (n,) accordingly.
 def logistic_score(beta, w_aug, x):
     p = jax.nn.sigmoid(w_aug @ beta)
-    return (x - p) * w_aug
+    return jnp.sum((x - p)[..., None] * w_aug, axis=0) if w_aug.ndim == 2 else (x - p) * w_aug
 
 
 # Fisher information matrix evaluated at beta, using the (fixed) augmented design matrix W_aug.
@@ -34,8 +35,13 @@ def logistic_fisher_info(beta, W_aug):
 # Recursively generate a length-T sequence of (x, w) pairs for a single predictive sequence:
 #   - w is resampled from the original covariates via the Bayesian bootstrap (Dirichlet weights)
 #   - x is drawn from a logistic model whose coefficients are updated at each step via the
-#     natural gradient (inverse Fisher information times the score), discounted by 1/(n + t)
-def _logistic_nat_grad_sequence(key, w_pool, W_orig_aug, beta_init, n, T):
+#     natural gradient, using running score and Fisher-information accumulators that are
+#     initialised from the original n observations and updated with each new draw.
+#     This avoids the rank-1 singularity of a single-observation Fisher information matrix:
+#     the accumulator F_t = F_{t-1} + p_t(1-p_t) w_t w_t^T is full rank from the start
+#     (because F_0 from the original n observations is already full rank), and grows
+#     richer with every additional draw.  The natural-gradient step is discounted by 1/(n+t).
+def _logistic_nat_grad_sequence(key, w_pool, W_orig_aug, x_orig, beta_init, n, T):
     n_pool = jnp.shape(w_pool)[0]
 
     # Bayesian bootstrap resample of w
@@ -46,29 +52,38 @@ def _logistic_nat_grad_sequence(key, w_pool, W_orig_aug, beta_init, n, T):
     w_new = w_pool[ind_w]
     w_new_aug = jnp.concatenate((jnp.ones((T, 1)), w_new), axis=1)
 
+    # Initialise accumulators from the original n observations evaluated at beta_init.
+    # At the MLE, S_0 is ~0 by definition; we compute it explicitly so the recursion
+    # is correct even if beta_init is not the exact MLE.
+    S_0 = logistic_score(beta_init, W_orig_aug, x_orig)   # total score: (p+1,)
+    F_0 = logistic_fisher_info(beta_init, W_orig_aug)      # total Fisher info: (p+1, p+1)
+
     def step(carry, inputs):
-        beta, key = carry
+        beta, S, F, key = carry
         t, w_t = inputs
 
         key, subkey = split(key)
         p_t = jax.nn.sigmoid(w_t @ beta)
         x_t = bernoulli(subkey, p_t).astype(beta.dtype)
 
-        score = logistic_score(beta, w_t, x_t)
-        fisher = logistic_fisher_info(beta, W_orig_aug)
-        nat_grad = jnp.linalg.solve(fisher, score)
+        # update running accumulators with the new observation
+        S_new = S + logistic_score(beta, w_t, x_t)
+        F_new = F + p_t * (1.0 - p_t) * jnp.outer(w_t, w_t)
 
-        eta_t = 1.0 / (n + t) #**(3/4) # potentially discount more/less
+        nat_grad = jnp.linalg.solve(F_new, S_new)
+        eta_t = 1.0 / (n + t + 1.0)
         beta_new = beta + eta_t * nat_grad
 
-        return (beta_new, key), x_t
+        return (beta_new, S_new, F_new, key), x_t
 
-    (beta_final, _), x_new = scan(step, (beta_init, key), (jnp.arange(T, dtype=beta_init.dtype), w_new_aug))
+    (beta_final, _, _, _), x_new = scan(
+        step, (beta_init, S_0, F_0, key), (jnp.arange(T, dtype=beta_init.dtype), w_new_aug)
+    )
 
     return x_new, w_new, beta_final
 
 
-_logistic_nat_grad_sequence_B = vmap(_logistic_nat_grad_sequence, (0, None, None, None, None, None))
+_logistic_nat_grad_sequence_B = vmap(_logistic_nat_grad_sequence, (0, None, None, None, None, None, None))
 
 
 # compute marginal density stats for Y(x) at given x_vals, averaging over W
@@ -273,8 +288,10 @@ def mp_density_att_logistic(y, x, w, y_grid, B_post, T_fwd, seed=42):
     key, *subkey = split(key, B_post + 1)
     subkey = jnp.array(subkey)
 
+    x_orig_jnp = jnp.array(x.astype(float))
+
     x_new_all, w_new_all, beta_final_all = _logistic_nat_grad_sequence_B(
-        subkey, w_jnp, W_aug_jnp, beta_init, float(n), T_fwd
+        subkey, w_jnp, W_aug_jnp, x_orig_jnp, beta_init, float(n), T_fwd
     )
 
     Z_new = jnp.concatenate((x_new_all[:, :, None], w_new_all), axis=-1)
