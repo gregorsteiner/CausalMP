@@ -2,7 +2,11 @@
   "permissions": {
     "allow": [
       "Bash(python -c \"import copula_mp\")",
-      "Bash(python -c ' *)"
+      "Bash(python -c ' *)",
+      "PowerShell(Copy-Item \"$env:USERPROFILE\\\\Downloads\\\\2211.01591v1 \\(1\\).pdf\" \"C:\\\\GitHub\\\\PostBayesIV\\\\_paper_tmp.pdf\"; Test-Path \"C:\\\\GitHub\\\\PostBayesIV\\\\_paper_tmp.pdf\")",
+      "PowerShell(python -c \"import pypdf; print\\('pypdf', pypdf.__version__\\)\" 2>$null)",
+      "PowerShell(python -c \"import pdfplumber; print\\('pdfplumber ok'\\)\" 2>$null)",
+      "PowerShell(python -c \"import fitz; print\\('pymupdf ok'\\)\" 2>$null)"
     ]
   }
 }
