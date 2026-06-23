@@ -150,11 +150,32 @@ def _summarize(marginal_pdfs):
     for i in range(n_x):
         mp = marginal_pdfs[:, i, :]
         results[f'x_{i}'] = {
-            'mean': np.array(jnp.mean(mp, axis=0)),
-            'low':  np.array(jnp.quantile(mp, 0.025, axis=0)),
-            'high': np.array(jnp.quantile(mp, 0.975, axis=0)),
+            'median': np.array(jnp.quantile(mp, 0.5, axis=0)),
+            'low':    np.array(jnp.quantile(mp, 0.025, axis=0)),
+            'high':   np.array(jnp.quantile(mp, 0.975, axis=0)),
         }
     return results
+
+
+def _summarize_conditional(cond_pdfs, w_cond):
+    """Summarize the conditional interventional densities p(y | X=x, w) at the requested
+    covariate rows.  ``cond_pdfs`` has shape (B, n_x, n_cond, n_y); returns a nested dict
+    ``{'w_values': w_cond, 'x_0': {'w_0': {...}, ...}, ...}`` with posterior median and 95%
+    credible bands for each (treatment value, conditioning covariate) pair.
+    """
+    n_x, n_cond = cond_pdfs.shape[1], cond_pdfs.shape[2]
+    out = {'w_values': np.asarray(w_cond)}
+    for i in range(n_x):
+        xi = {}
+        for j in range(n_cond):
+            s = cond_pdfs[:, i, j, :]
+            xi[f'w_{j}'] = {
+                'median': np.array(jnp.quantile(s, 0.5, axis=0)),
+                'low':    np.array(jnp.quantile(s, 0.025, axis=0)),
+                'high':   np.array(jnp.quantile(s, 0.975, axis=0)),
+            }
+        out[f'x_{i}'] = xi
+    return out
 
 
 def _bb_covariate_weights(inv, n_w, B_post, seed):
@@ -185,7 +206,7 @@ def _build_target_grid(x_vals, w_unique_jnp, y_grid):
 
 
 def _mp_density_s_learner(y, x, w, x_vals, y_grid, B_post, T_fwd,
-                          x_update, weighting, seed):
+                          x_update, weighting, seed, w_cond=None):
     Z = np.column_stack((x, w))
     n = Z.shape[0]
     y_jnp, Z_jnp = jnp.array(y), jnp.array(Z)
@@ -200,7 +221,14 @@ def _mp_density_s_learner(y, x, w, x_vals, y_grid, B_post, T_fwd,
     w_unique_jnp = jnp.array(w_unique)
     n_w, n_x, n_y = len(w_unique_jnp), len(x_vals), len(y_grid)
 
-    y_target, z_target = _build_target_grid(x_vals, w_unique_jnp, y_grid)
+    # extend the evaluation grid with the conditioning covariate rows, kept in a separate
+    # trailing block so they do not enter the marginalisation over the covariate law.
+    n_cond = 0 if w_cond is None else len(w_cond)
+    w_grid_jnp = (jnp.concatenate((w_unique_jnp, jnp.array(w_cond)), axis=0)
+                  if n_cond else w_unique_jnp)
+    n_w_tot = n_w + n_cond
+
+    y_target, z_target = _build_target_grid(x_vals, w_grid_jnp, y_grid)
 
     prop_scores = None
     ind_new_pr = None
@@ -242,13 +270,16 @@ def _mp_density_s_learner(y, x, w, x_vals, y_grid, B_post, T_fwd,
         prop_scores = np.array(jax.nn.sigmoid(W_aug_jnp @ beta_final_all.T).T)
 
     logpdf_pr = jnp.squeeze(logpdf_pr)
-    pdfs = jnp.exp(logpdf_pr).reshape(B_post, n_x, n_w, n_y)
+    pdfs = jnp.exp(logpdf_pr).reshape(B_post, n_x, n_w_tot, n_y)
 
     mask = (sampled_x == 1) if weighting == "att" else None
     weights = _covariate_weights(sampled_w, w_unique_jnp, mask)
-    marginal_pdfs = jnp.einsum('bw,bxwy->bxy', weights, pdfs)
+    marginal_pdfs = jnp.einsum('bw,bxwy->bxy', weights, pdfs[:, :, :n_w, :])
 
     results = _summarize(marginal_pdfs)
+
+    if n_cond:
+        results['conditional'] = _summarize_conditional(pdfs[:, :, n_w:, :], w_cond)
 
     # propensity scores are reported whenever they are well defined: the ATT case (via a
     # per-sequence logistic refit) or whenever x was generated from a logistic model.
@@ -260,9 +291,11 @@ def _mp_density_s_learner(y, x, w, x_vals, y_grid, B_post, T_fwd,
     return results
 
 
-def _mp_density_t_learner(y, x, w, x_vals, y_grid, B_post, T_fwd, weighting, seed):
+def _mp_density_t_learner(y, x, w, x_vals, y_grid, B_post, T_fwd, weighting, seed, w_cond=None):
     y = np.asarray(y)
     n_y = len(y_grid)
+    n_cond = 0 if w_cond is None else len(w_cond)
+    w_cond_jnp = jnp.array(w_cond) if n_cond else None
 
     # The outcome model p(y | X=x, w) (per arm) and the covariate law P(w) are separate
     # parameters with independent posteriors; we draw each and combine via the integral
@@ -278,7 +311,13 @@ def _mp_density_t_learner(y, x, w, x_vals, y_grid, B_post, T_fwd, weighting, see
     # closed-form Bayesian-bootstrap posterior of P(w); a single draw shared across arms
     cov_weights = _bb_covariate_weights(inv, n_w, B_post, seed)  # (B_post, n_w)
 
+    # extend each arm's grid with the conditioning rows, kept in a trailing block
+    w_grid_jnp = (jnp.concatenate((w_unique_jnp, w_cond_jnp), axis=0)
+                  if n_cond else w_unique_jnp)
+    n_w_tot = n_w + n_cond
+
     marginals = []
+    cond_blocks = []
     for x_val in x_vals:
         mask_arm = x == x_val
         Z_sub_jnp = jnp.array(np.column_stack((x[mask_arm], w[mask_arm])))
@@ -288,16 +327,23 @@ def _mp_density_t_learner(y, x, w, x_vals, y_grid, B_post, T_fwd, weighting, see
                                      single_x_bandwidth=False, n_perm_optim=10)
         _print_fit(fit, label=f"x={x_val}")
 
-        y_target, z_target = _build_target_grid([x_val], w_unique_jnp, y_grid)
+        y_target, z_target = _build_target_grid([x_val], w_grid_jnp, y_grid)
         _, logpdf_pr, _ = predictive_resample_cregression(
             fit, Z_sub_jnp, y_target, z_target, B_post, T_fwd, seed=seed
         )
-        pdfs = jnp.exp(jnp.squeeze(logpdf_pr)).reshape(B_post, n_w, n_y)
+        pdfs = jnp.exp(jnp.squeeze(logpdf_pr)).reshape(B_post, n_w_tot, n_y)
 
-        marginals.append(jnp.einsum('bw,bwy->by', cov_weights, pdfs))
+        marginals.append(jnp.einsum('bw,bwy->by', cov_weights, pdfs[:, :n_w, :]))
+        if n_cond:
+            cond_blocks.append(pdfs[:, n_w:, :])   # (B, n_cond, n_y) for this arm
 
     marginal_pdfs = jnp.stack(marginals, axis=1)  # (B, n_x, n_y)
-    return _summarize(marginal_pdfs)
+    results = _summarize(marginal_pdfs)
+
+    if n_cond:
+        cond_pdfs = jnp.stack(cond_blocks, axis=1)  # (B, n_x, n_cond, n_y)
+        results['conditional'] = _summarize_conditional(cond_pdfs, w_cond)
+    return results
 
 
 # Unified marginal counterfactual density estimator via the martingale posterior.
@@ -320,11 +366,19 @@ def _mp_density_t_learner(y, x, w, x_vals, y_grid, B_post, T_fwd, weighting, see
 # logistic x-update has no meaning when treatment is fixed within each arm).
 #
 # Returns a dict with keys ``"x_0", ..., "x_{k-1}"`` (one per value of ``x_vals``), each a
-# dict with "mean", "low", "high".  A "propensity_scores" entry (shape (B_post, n)) is
+# dict with "median", "low", "high".  A "propensity_scores" entry (shape (B_post, n)) is
 # added whenever propensity scores are well defined, i.e. for ``weighting="att"`` or
 # ``x_update="logistic"``.
+#
+# ``w_cond`` (optional, shape (n_cond, p) or (p,)) additionally returns the *conditional*
+# interventional densities p(y | X=x, w) at the given covariate rows, without marginalising
+# over W, under the key ``"conditional"`` (nested as ``conditional[x_i][w_j]``).  These
+# slices are a pure outcome-model object: they are unaffected by ``x_update`` and
+# ``weighting`` (which only shape the marginalisation), and share the predictive-resampling
+# draws of the marginal run.  With ``w_cond=None`` the marginal output is unchanged.
 def mp_causal_density(y, x, w, y_grid, B_post, T_fwd, *,
-                      x_vals=(0, 1), x_update="bb", weighting="ate", learner="s", seed=42):
+                      x_vals=(0, 1), x_update="bb", weighting="ate", learner="s",
+                      w_cond=None, seed=42):
     if x_update not in ("bb", "logistic"):
         raise ValueError("x_update must be 'bb' or 'logistic'")
     if weighting not in ("ate", "att"):
@@ -347,6 +401,15 @@ def mp_causal_density(y, x, w, y_grid, B_post, T_fwd, *,
     else:
         x_vals = np.asarray(x_vals)
 
+    if w_cond is not None:
+        w_cond = np.asarray(w_cond, dtype=float)
+        if w_cond.ndim == 1:
+            w_cond = w_cond.reshape(1, -1)
+        if w_cond.shape[1] != w.shape[1]:
+            raise ValueError(
+                f"w_cond must have {w.shape[1]} columns to match w; got {w_cond.shape[1]}"
+            )
+
     # the logistic x-update and the ATT weighting both assume a binary treatment
     if x_update == "logistic" or weighting == "att":
         x_levels = set(np.unique(x).tolist())
@@ -362,6 +425,7 @@ def mp_causal_density(y, x, w, y_grid, B_post, T_fwd, *,
             raise ValueError("both treated (x==1) and control (x==0) observations are required")
 
     if learner == "t":
-        return _mp_density_t_learner(y, x, w, x_vals, y_grid, B_post, T_fwd, weighting, seed)
+        return _mp_density_t_learner(y, x, w, x_vals, y_grid, B_post, T_fwd, weighting, seed,
+                                     w_cond=w_cond)
     return _mp_density_s_learner(y, x, w, x_vals, y_grid, B_post, T_fwd,
-                                 x_update, weighting, seed)
+                                 x_update, weighting, seed, w_cond=w_cond)
