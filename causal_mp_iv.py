@@ -458,9 +458,9 @@ def mp_density_iv(y, x, z, x_vals, y_grid, B_post, T_fwd, seed=42):
         # Average over the empirical distribution of eta
         # Shape: B_post x n_y
         p_y_given_x = jnp.mean(pdfs[:, i, :, :], axis=1)
-        
+
         results[f'x_{i}'] = {
-            'median': np.array(jnp.quantile(p_y_given_x, 0.5, axis=0)),
+            'mean': np.array(jnp.mean(p_y_given_x, axis=0)),
             'low': np.array(jnp.quantile(p_y_given_x, 0.025, axis=0)),
             'high': np.array(jnp.quantile(p_y_given_x, 0.975, axis=0))
         }

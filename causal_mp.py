@@ -150,7 +150,7 @@ def _summarize(marginal_pdfs):
     for i in range(n_x):
         mp = marginal_pdfs[:, i, :]
         results[f'x_{i}'] = {
-            'median': np.array(jnp.quantile(mp, 0.5, axis=0)),
+            'mean':   np.array(jnp.mean(mp, axis=0)),
             'low':    np.array(jnp.quantile(mp, 0.025, axis=0)),
             'high':   np.array(jnp.quantile(mp, 0.975, axis=0)),
         }
@@ -160,7 +160,7 @@ def _summarize(marginal_pdfs):
 def _summarize_conditional(cond_pdfs, w_cond):
     """Summarize the conditional interventional densities p(y | X=x, w) at the requested
     covariate rows.  ``cond_pdfs`` has shape (B, n_x, n_cond, n_y); returns a nested dict
-    ``{'w_values': w_cond, 'x_0': {'w_0': {...}, ...}, ...}`` with posterior median and 95%
+    ``{'w_values': w_cond, 'x_0': {'w_0': {...}, ...}, ...}`` with posterior mean and 95%
     credible bands for each (treatment value, conditioning covariate) pair.
     """
     n_x, n_cond = cond_pdfs.shape[1], cond_pdfs.shape[2]
@@ -170,7 +170,7 @@ def _summarize_conditional(cond_pdfs, w_cond):
         for j in range(n_cond):
             s = cond_pdfs[:, i, j, :]
             xi[f'w_{j}'] = {
-                'median': np.array(jnp.quantile(s, 0.5, axis=0)),
+                'mean':   np.array(jnp.mean(s, axis=0)),
                 'low':    np.array(jnp.quantile(s, 0.025, axis=0)),
                 'high':   np.array(jnp.quantile(s, 0.975, axis=0)),
             }
