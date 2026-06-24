@@ -2,7 +2,7 @@
 import jax
 import jax.numpy as jnp
 from jax import vmap
-from jax.lax import scan
+from jax.lax import scan, fori_loop
 from jax.random import PRNGKey, split, dirichlet, choice, bernoulli
 import pandas as pd
 import numpy as np
@@ -10,6 +10,7 @@ import statsmodels.api as sm
 
 #import copula functions
 from pr_copula.main_copula_regression_conditional import fit_copula_cregression,predict_copula_cregression,predictive_resample_cregression,predictive_resample_cregression_presampled,check_convergence_pr_cregression
+from pr_copula.copula_regression_functions import update_copula as _copula_update_reg, calc_logkxx as _calc_logkxx
 
 
 ### Logistic regression score and Fisher information ###
@@ -429,3 +430,393 @@ def mp_causal_density(y, x, w, y_grid, B_post, T_fwd, *,
                                      w_cond=w_cond)
     return _mp_density_s_learner(y, x, w, x_vals, y_grid, B_post, T_fwd,
                                  x_update, weighting, seed, w_cond=w_cond)
+
+
+### Diagnostic functions ###
+
+def _compute_w_map(x, w, w_unique, weighting):
+    n = len(x)
+    if weighting == "att":
+        w_map_arr = np.full(n, -1, dtype=int)
+        for i in range(n):
+            matches = np.all(w[i:i+1] == w_unique, axis=1)
+            if np.any(matches):
+                w_map_arr[i] = np.argmax(matches)
+        return jnp.array(w_map_arr)
+    else:
+        _, w_inv = np.unique(w, axis=0, return_inverse=True)
+        return jnp.array(w_inv)
+
+
+def _make_w_idx_and_mask(ind_new, w_map, Z_jnp, weighting):
+    w_idx = w_map[ind_new]
+    if weighting == "att":
+        x_new = Z_jnp[ind_new, 0]
+        w_msk = ((x_new == 1) & (w_idx >= 0)).astype(jnp.float32)
+        w_idx = jnp.where(w_idx < 0, 0, w_idx)
+    else:
+        w_msk = jnp.ones(ind_new.shape[0])
+    return w_idx, w_msk
+
+
+def _mp_density_s_learner_diagnostic(y, x, w, x_vals, y_grid, B_post, T_fwd,
+                                     x_update, weighting, seed, w_cond=None):
+    Z = np.column_stack((x, w))
+    n = Z.shape[0]
+    y_jnp, Z_jnp = jnp.array(y), jnp.array(Z)
+
+    fit = fit_copula_cregression(y_jnp, Z_jnp, single_x_bandwidth=False, n_perm_optim=10)
+    _print_fit(fit)
+    rho_opt = fit.rho_opt
+    rho_x_opt = fit.rho_x_opt
+
+    w_pop = w[x == 1] if weighting == "att" else w
+    w_unique, w_inv = np.unique(w_pop, axis=0, return_inverse=True)
+    w_unique_jnp = jnp.array(w_unique)
+    n_w, n_x, n_y = len(w_unique), len(x_vals), len(y_grid)
+
+    n_cond = 0 if w_cond is None else len(w_cond)
+    w_grid_jnp = (jnp.concatenate((w_unique_jnp, jnp.array(w_cond)), axis=0)
+                  if n_cond else w_unique_jnp)
+    n_w_tot = n_w + n_cond
+
+    y_target, z_target = _build_target_grid(x_vals, w_grid_jnp, y_grid)
+
+    logcdf_init, logpdf_init = predict_copula_cregression(fit, y_target, z_target)
+
+    w_emp_counts = np.bincount(w_inv, minlength=n_w).astype(float)
+    w_emp_weights = jnp.array(w_emp_counts / w_emp_counts.sum())
+
+    flat_idx = np.arange(n_x * n_w_tot * n_y).reshape(n_x, n_w_tot, n_y)
+    marginal_idx = jnp.array(flat_idx[:, :n_w, :].transpose(0, 2, 1))  # (n_x, n_y, n_w)
+
+    pdf_init_flat = jnp.exp(logpdf_init[:, -1])
+    p_n_marginal = jnp.sum(pdf_init_flat[marginal_idx] * w_emp_weights[None, None, :], axis=-1)
+
+    w_map = _compute_w_map(x, w, w_unique, weighting)
+
+    prop_scores = None
+
+    if x_update == "bb":
+        key = PRNGKey(seed)
+        key, *subkeys = split(key, B_post + 1)
+        subkeys_arr = jnp.array(subkeys)
+
+        def _single_diag(subkey):
+            k1, k2, k3 = split(subkey, 3)
+            bb_w = dirichlet(k1, jnp.ones(n))
+            ind_new = choice(k2, a=jnp.arange(n), p=bb_w, shape=(T_fwd,))
+            z_new = Z_jnp[ind_new]
+            z_samp = jnp.concatenate((Z_jnp, z_new), axis=0)
+
+            w_idx, w_msk = _make_w_idx_and_mask(ind_new, w_map, Z_jnp, weighting)
+            a_rand = jax.random.uniform(k3, shape=(T_fwd, 1))
+
+            counts_init = jnp.zeros(n_w)
+            l1_init = jnp.zeros((T_fwd, n_x))
+
+            def step(i, carry):
+                logcdf, logpdf, l1_dists, counts = carry
+                z_new_i = z_samp[n + i]
+                logalpha = jnp.log(2.0 - 1.0 / (n + i + 1)) - jnp.log(n + i + 2.0)
+                logk_xx = _calc_logkxx(z_target, z_new_i, rho_x_opt)
+                logalphak_xx = logalpha + logk_xx
+                log1alpha = jnp.log1p(-jnp.exp(logalpha))
+                logalpha_x = logalphak_xx - jnp.logaddexp(log1alpha, logalphak_xx)
+                u = jnp.exp(logcdf)
+                v = a_rand[i]
+                logcdf, logpdf = _copula_update_reg(logcdf, logpdf, u, v, logalpha_x, rho_opt)
+
+                counts = counts.at[w_idx[i]].add(w_msk[i])
+                total = counts.sum()
+                weights = jnp.where(total > 0, counts / total, jnp.ones(n_w) / n_w)
+
+                pdf_flat = jnp.exp(logpdf[:, -1])
+                pdf_sel = pdf_flat[marginal_idx]
+                marginal = jnp.sum(pdf_sel * weights[None, None, :], axis=-1)
+                l1 = jnp.sum(jnp.abs(marginal - p_n_marginal), axis=-1)
+                l1_dists = l1_dists.at[i].set(l1)
+
+                return logcdf, logpdf, l1_dists, counts
+
+            logcdf_f, logpdf_f, l1_dists, final_counts = fori_loop(
+                0, T_fwd, step, (logcdf_init, logpdf_init, l1_init, counts_init))
+            return logpdf_f, l1_dists, final_counts, ind_new
+
+        print('Diagnostic resampling...')
+        logpdf_pr, l1_trajectory, final_counts_all, ind_new_pr = vmap(_single_diag)(subkeys_arr)
+
+        sampled_x = Z_jnp[ind_new_pr, 0]
+        sampled_w = Z_jnp[ind_new_pr, 1:]
+
+    else:  # x_update == "logistic"
+        W_aug = sm.add_constant(w, has_constant='add')
+        logit_fit = sm.Logit(x, W_aug).fit(disp=False)
+        beta_init = jnp.array(np.asarray(logit_fit.params))
+        w_jnp = jnp.array(w)
+        W_aug_jnp = jnp.array(np.asarray(W_aug))
+
+        key = PRNGKey(seed)
+        key, *subkeys = split(key, B_post + 1)
+        subkeys_arr = jnp.array(subkeys)
+        x_orig_jnp = jnp.array(np.asarray(x).astype(float))
+
+        x_new_all, w_new_all, beta_final_all = _logistic_nat_grad_sequence_B(
+            subkeys_arr, w_jnp, W_aug_jnp, x_orig_jnp, beta_init, float(n), T_fwd
+        )
+
+        Z_new = jnp.concatenate((x_new_all[:, :, None], w_new_all), axis=-1)
+        Z_orig_tiled = jnp.tile(Z_jnp[None, :, :], (B_post, 1, 1))
+        Z_samp_all = jnp.concatenate((Z_orig_tiled, Z_new), axis=1)
+
+        matched = jnp.all(w_new_all[:, :, None, :] == w_unique_jnp[None, None, :, :], axis=-1)
+        w_idx_all = jnp.argmax(matched, axis=-1)
+        if weighting == "att":
+            w_msk_all = (x_new_all == 1).astype(jnp.float32) * jnp.any(matched, axis=-1).astype(jnp.float32)
+        else:
+            w_msk_all = jnp.ones((B_post, T_fwd))
+
+        key, *subkeys2 = split(key, B_post + 1)
+        subkeys2_arr = jnp.array(subkeys2)
+
+        def _single_diag_logistic(subkey, z_samp, w_idx, w_msk):
+            a_rand = jax.random.uniform(subkey, shape=(T_fwd, 1))
+            counts_init = jnp.zeros(n_w)
+            l1_init = jnp.zeros((T_fwd, n_x))
+
+            def step(i, carry):
+                logcdf, logpdf, l1_dists, counts = carry
+                z_new_i = z_samp[n + i]
+                logalpha = jnp.log(2.0 - 1.0 / (n + i + 1)) - jnp.log(n + i + 2.0)
+                logk_xx = _calc_logkxx(z_target, z_new_i, rho_x_opt)
+                logalphak_xx = logalpha + logk_xx
+                log1alpha = jnp.log1p(-jnp.exp(logalpha))
+                logalpha_x = logalphak_xx - jnp.logaddexp(log1alpha, logalphak_xx)
+                u = jnp.exp(logcdf)
+                v = a_rand[i]
+                logcdf, logpdf = _copula_update_reg(logcdf, logpdf, u, v, logalpha_x, rho_opt)
+
+                counts = counts.at[w_idx[i]].add(w_msk[i])
+                total = counts.sum()
+                weights = jnp.where(total > 0, counts / total, jnp.ones(n_w) / n_w)
+
+                pdf_flat = jnp.exp(logpdf[:, -1])
+                pdf_sel = pdf_flat[marginal_idx]
+                marginal = jnp.sum(pdf_sel * weights[None, None, :], axis=-1)
+                l1 = jnp.sum(jnp.abs(marginal - p_n_marginal), axis=-1)
+                l1_dists = l1_dists.at[i].set(l1)
+
+                return logcdf, logpdf, l1_dists, counts
+
+            logcdf_f, logpdf_f, l1_dists, final_counts = fori_loop(
+                0, T_fwd, step, (logcdf_init, logpdf_init, l1_init, counts_init))
+            return logpdf_f, l1_dists, final_counts
+
+        print('Diagnostic resampling...')
+        logpdf_pr, l1_trajectory, final_counts_all = vmap(
+            _single_diag_logistic)(subkeys2_arr, Z_samp_all, w_idx_all, w_msk_all)
+
+        sampled_x = x_new_all
+        sampled_w = w_new_all
+        prop_scores = np.array(jax.nn.sigmoid(W_aug_jnp @ beta_final_all.T).T)
+
+    logpdf_pr = jnp.squeeze(logpdf_pr)
+    pdfs = jnp.exp(logpdf_pr).reshape(B_post, n_x, n_w_tot, n_y)
+
+    final_weights = final_counts_all / final_counts_all.sum(axis=1, keepdims=True)
+    marginal_pdfs = jnp.einsum('bw,bxwy->bxy', final_weights, pdfs[:, :, :n_w, :])
+    results = _summarize(marginal_pdfs)
+    results['l1_trajectory'] = np.array(l1_trajectory)
+
+    if n_cond:
+        results['conditional'] = _summarize_conditional(pdfs[:, :, n_w:, :], w_cond)
+
+    if weighting == "att" and x_update == "bb":
+        prop_scores = fit_propensity_scores(Z, np.asarray(ind_new_pr))
+    if prop_scores is not None:
+        results['propensity_scores'] = np.asarray(prop_scores)
+
+    return results
+
+
+def _mp_density_t_learner_diagnostic(y, x, w, x_vals, y_grid, B_post, T_fwd,
+                                     weighting, seed, w_cond=None):
+    y = np.asarray(y)
+    n_y = len(y_grid)
+    n_cond = 0 if w_cond is None else len(w_cond)
+    w_cond_jnp = jnp.array(w_cond) if n_cond else None
+
+    w_pop = w[x == 1] if weighting == "att" else w
+    w_unique, w_inv = np.unique(w_pop, axis=0, return_inverse=True)
+    w_unique_jnp = jnp.array(w_unique)
+    n_w = len(w_unique_jnp)
+    n_x = len(x_vals)
+
+    w_emp_counts = np.bincount(w_inv, minlength=n_w).astype(float)
+    w_emp_weights = jnp.array(w_emp_counts / w_emp_counts.sum())
+
+    w_grid_jnp = (jnp.concatenate((w_unique_jnp, w_cond_jnp), axis=0)
+                  if n_cond else w_unique_jnp)
+    n_w_tot = n_w + n_cond
+
+    # Shared BB covariate sequence (explicit resampling, not Dirichlet)
+    n_pop = len(w_pop)
+    key = PRNGKey(seed)
+    key, *subkeys_shared = split(key, B_post + 1)
+    subkeys_shared = jnp.array(subkeys_shared)
+
+    w_pop_jnp = jnp.array(w_pop)
+    _, w_pop_inv = np.unique(w_pop, axis=0, return_inverse=True)
+    w_pop_map = jnp.array(w_pop_inv)
+
+    def _draw_shared_bb(subkey):
+        k1, k2 = split(subkey)
+        bb_w = dirichlet(k1, jnp.ones(n_pop))
+        ind_shared = choice(k2, a=jnp.arange(n_pop), p=bb_w, shape=(T_fwd,))
+        w_idx_shared = w_pop_map[ind_shared]
+        return w_idx_shared
+
+    shared_w_idx = vmap(_draw_shared_bb)(subkeys_shared)  # (B_post, T_fwd)
+
+    marginals = []
+    cond_blocks = []
+    l1_all_arms = []
+
+    for arm_i, x_val in enumerate(x_vals):
+        mask_arm = x == x_val
+        y_arm = jnp.array(y[mask_arm])
+        Z_sub = np.column_stack((x[mask_arm], w[mask_arm]))
+        Z_sub_jnp = jnp.array(Z_sub)
+        n_arm = Z_sub.shape[0]
+
+        fit = fit_copula_cregression(y_arm, Z_sub_jnp,
+                                     single_x_bandwidth=False, n_perm_optim=10)
+        _print_fit(fit, label=f"x={x_val}")
+        rho_opt = fit.rho_opt
+        rho_x_opt = fit.rho_x_opt
+
+        y_target, z_target = _build_target_grid([x_val], w_grid_jnp, y_grid)
+        logcdf_init, logpdf_init = predict_copula_cregression(fit, y_target, z_target)
+
+        flat_idx = np.arange(1 * n_w_tot * n_y).reshape(1, n_w_tot, n_y)
+        marginal_idx = jnp.array(flat_idx[:, :n_w, :].transpose(0, 2, 1))  # (1, n_y, n_w)
+
+        pdf_init_flat = jnp.exp(logpdf_init[:, -1])
+        p_n_marginal = jnp.sum(pdf_init_flat[marginal_idx] * w_emp_weights[None, None, :], axis=-1)
+
+        key, *subkeys_arm = split(key, B_post + 1)
+        subkeys_arm = jnp.array(subkeys_arm)
+
+        def _single_diag_arm(subkey, w_idx_shared):
+            k1, k2, k3 = split(subkey, 3)
+            bb_w = dirichlet(k1, jnp.ones(n_arm))
+            ind_new = choice(k2, a=jnp.arange(n_arm), p=bb_w, shape=(T_fwd,))
+            z_new = Z_sub_jnp[ind_new]
+            z_samp = jnp.concatenate((Z_sub_jnp, z_new), axis=0)
+
+            a_rand = jax.random.uniform(k3, shape=(T_fwd, 1))
+            counts_init = jnp.zeros(n_w)
+            l1_init = jnp.zeros((T_fwd, 1))
+
+            def step(i, carry):
+                logcdf, logpdf, l1_dists, counts = carry
+                z_new_i = z_samp[n_arm + i]
+                logalpha = jnp.log(2.0 - 1.0 / (n_arm + i + 1)) - jnp.log(n_arm + i + 2.0)
+                logk_xx = _calc_logkxx(z_target, z_new_i, rho_x_opt)
+                logalphak_xx = logalpha + logk_xx
+                log1alpha = jnp.log1p(-jnp.exp(logalpha))
+                logalpha_x = logalphak_xx - jnp.logaddexp(log1alpha, logalphak_xx)
+                u = jnp.exp(logcdf)
+                v = a_rand[i]
+                logcdf, logpdf = _copula_update_reg(logcdf, logpdf, u, v, logalpha_x, rho_opt)
+
+                counts = counts.at[w_idx_shared[i]].add(1.0)
+                weights = counts / counts.sum()
+
+                pdf_flat = jnp.exp(logpdf[:, -1])
+                pdf_sel = pdf_flat[marginal_idx]
+                marginal = jnp.sum(pdf_sel * weights[None, None, :], axis=-1)
+                l1 = jnp.sum(jnp.abs(marginal - p_n_marginal), axis=-1)
+                l1_dists = l1_dists.at[i].set(l1)
+
+                return logcdf, logpdf, l1_dists, counts
+
+            logcdf_f, logpdf_f, l1_dists, final_counts = fori_loop(
+                0, T_fwd, step, (logcdf_init, logpdf_init, l1_init, counts_init))
+            return logpdf_f, l1_dists, final_counts
+
+        print(f'Diagnostic resampling for x={x_val}...')
+        logpdf_pr, l1_arm, final_counts = vmap(_single_diag_arm)(subkeys_arm, shared_w_idx)
+
+        pdfs = jnp.exp(jnp.squeeze(logpdf_pr)).reshape(B_post, n_w_tot, n_y)
+        final_weights = final_counts / final_counts.sum(axis=1, keepdims=True)
+        marginals.append(jnp.einsum('bw,bwy->by', final_weights, pdfs[:, :n_w, :]))
+        l1_all_arms.append(l1_arm)
+        if n_cond:
+            cond_blocks.append(pdfs[:, n_w:, :])
+
+    marginal_pdfs = jnp.stack(marginals, axis=1)
+    results = _summarize(marginal_pdfs)
+
+    l1_trajectory = jnp.concatenate(l1_all_arms, axis=-1)  # (B, T, n_x)
+    results['l1_trajectory'] = np.array(l1_trajectory)
+
+    if n_cond:
+        cond_pdfs = jnp.stack(cond_blocks, axis=1)
+        results['conditional'] = _summarize_conditional(cond_pdfs, w_cond)
+    return results
+
+
+def mp_causal_density_diagnostic(y, x, w, y_grid, B_post, T_fwd, *,
+                                 x_vals=(0, 1), x_update="bb", weighting="ate",
+                                 learner="s", w_cond=None, seed=42):
+    if x_update not in ("bb", "logistic"):
+        raise ValueError("x_update must be 'bb' or 'logistic'")
+    if weighting not in ("ate", "att"):
+        raise ValueError("weighting must be 'ate' or 'att'")
+    if learner not in ("s", "t"):
+        raise ValueError("learner must be 's' or 't'")
+    if learner == "t" and x_update == "logistic":
+        raise ValueError(
+            "learner='t' is incompatible with x_update='logistic': treatment is fixed "
+            "within each arm, so an in-sequence logistic x-update is not defined."
+        )
+
+    w = np.asarray(w)
+    if w.ndim == 1:
+        w = w.reshape(-1, 1)
+    x = np.asarray(x)
+
+    if np.isscalar(x_vals):
+        x_vals = np.array([x_vals])
+    else:
+        x_vals = np.asarray(x_vals)
+
+    if w_cond is not None:
+        w_cond = np.asarray(w_cond, dtype=float)
+        if w_cond.ndim == 1:
+            w_cond = w_cond.reshape(1, -1)
+        if w_cond.shape[1] != w.shape[1]:
+            raise ValueError(
+                f"w_cond must have {w.shape[1]} columns to match w; got {w_cond.shape[1]}"
+            )
+
+    if x_update == "logistic" or weighting == "att":
+        x_levels = set(np.unique(x).tolist())
+        if not x_levels.issubset({0, 1}):
+            raise ValueError(
+                f"x_update='logistic'/weighting='att' require binary x in {{0, 1}}; got levels {sorted(x_levels)}"
+            )
+        if set(np.asarray(x_vals).tolist()) != {0, 1}:
+            raise ValueError(
+                "x_update='logistic'/weighting='att' require x_vals=(0, 1)"
+            )
+        if np.sum(x == 1) == 0 or np.sum(x == 0) == 0:
+            raise ValueError("both treated (x==1) and control (x==0) observations are required")
+
+    if learner == "t":
+        return _mp_density_t_learner_diagnostic(y, x, w, x_vals, y_grid, B_post, T_fwd,
+                                                weighting, seed, w_cond=w_cond)
+    return _mp_density_s_learner_diagnostic(y, x, w, x_vals, y_grid, B_post, T_fwd,
+                                            x_update, weighting, seed, w_cond=w_cond)
+### ###
