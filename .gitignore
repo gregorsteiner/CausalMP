@@ -26,3 +26,4 @@ Manifest.toml
 # ignore jupyter notebook checkpoints
 .ipynb_checkpoints
 *.pyc
+.claude/settings.local.json

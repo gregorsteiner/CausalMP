@@ -355,7 +355,7 @@ def mp_density_iv(y, x, z, x_vals, y_grid, B_post, T_fwd, seed=42):
     Returns:
     --------
     results : dict
-        Dictionary with keys 'x_{i}' for each x_val, containing 'mean', 'low', and 'high' 
+        Dictionary with keys 'x_{i}' for each x_val, containing 'median', 'low', and 'high'
         quantiles of the interventional density p(y(x))
     """
     # Convert inputs to arrays
@@ -458,7 +458,7 @@ def mp_density_iv(y, x, z, x_vals, y_grid, B_post, T_fwd, seed=42):
         # Average over the empirical distribution of eta
         # Shape: B_post x n_y
         p_y_given_x = jnp.mean(pdfs[:, i, :, :], axis=1)
-        
+
         results[f'x_{i}'] = {
             'mean': np.array(jnp.mean(p_y_given_x, axis=0)),
             'low': np.array(jnp.quantile(p_y_given_x, 0.025, axis=0)),
