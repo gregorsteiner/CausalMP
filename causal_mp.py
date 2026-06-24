@@ -460,7 +460,7 @@ def _make_w_idx_and_mask(ind_new, w_map, Z_jnp, weighting):
 
 
 def _mp_density_s_learner_diagnostic(y, x, w, x_vals, y_grid, B_post, T_fwd,
-                                     x_update, weighting, seed, w_cond=None):
+                                     x_update, weighting, seed):
     Z = np.column_stack((x, w))
     n = Z.shape[0]
     y_jnp, Z_jnp = jnp.array(y), jnp.array(Z)
@@ -475,20 +475,15 @@ def _mp_density_s_learner_diagnostic(y, x, w, x_vals, y_grid, B_post, T_fwd,
     w_unique_jnp = jnp.array(w_unique)
     n_w, n_x, n_y = len(w_unique), len(x_vals), len(y_grid)
 
-    n_cond = 0 if w_cond is None else len(w_cond)
-    w_grid_jnp = (jnp.concatenate((w_unique_jnp, jnp.array(w_cond)), axis=0)
-                  if n_cond else w_unique_jnp)
-    n_w_tot = n_w + n_cond
-
-    y_target, z_target = _build_target_grid(x_vals, w_grid_jnp, y_grid)
+    y_target, z_target = _build_target_grid(x_vals, w_unique_jnp, y_grid)
 
     logcdf_init, logpdf_init = predict_copula_cregression(fit, y_target, z_target)
 
     w_emp_counts = np.bincount(w_inv, minlength=n_w).astype(float)
     w_emp_weights = jnp.array(w_emp_counts / w_emp_counts.sum())
 
-    flat_idx = np.arange(n_x * n_w_tot * n_y).reshape(n_x, n_w_tot, n_y)
-    marginal_idx = jnp.array(flat_idx[:, :n_w, :].transpose(0, 2, 1))  # (n_x, n_y, n_w)
+    flat_idx = np.arange(n_x * n_w * n_y).reshape(n_x, n_w, n_y)
+    marginal_idx = jnp.array(flat_idx.transpose(0, 2, 1))  # (n_x, n_y, n_w)
 
     pdf_init_flat = jnp.exp(logpdf_init[:, -1])
     p_n_marginal = jnp.sum(pdf_init_flat[marginal_idx] * w_emp_weights[None, None, :], axis=-1)
@@ -621,15 +616,13 @@ def _mp_density_s_learner_diagnostic(y, x, w, x_vals, y_grid, B_post, T_fwd,
         prop_scores = np.array(jax.nn.sigmoid(W_aug_jnp @ beta_final_all.T).T)
 
     logpdf_pr = jnp.squeeze(logpdf_pr)
-    pdfs = jnp.exp(logpdf_pr).reshape(B_post, n_x, n_w_tot, n_y)
+    pdfs = jnp.exp(logpdf_pr).reshape(B_post, n_x, n_w, n_y)
 
     final_weights = final_counts_all / final_counts_all.sum(axis=1, keepdims=True)
-    marginal_pdfs = jnp.einsum('bw,bxwy->bxy', final_weights, pdfs[:, :, :n_w, :])
+    marginal_pdfs = jnp.einsum('bw,bxwy->bxy', final_weights, pdfs)
+
     results = _summarize(marginal_pdfs)
     results['l1_trajectory'] = np.array(l1_trajectory)
-
-    if n_cond:
-        results['conditional'] = _summarize_conditional(pdfs[:, :, n_w:, :], w_cond)
 
     if weighting == "att" and x_update == "bb":
         prop_scores = fit_propensity_scores(Z, np.asarray(ind_new_pr))
@@ -640,11 +633,9 @@ def _mp_density_s_learner_diagnostic(y, x, w, x_vals, y_grid, B_post, T_fwd,
 
 
 def _mp_density_t_learner_diagnostic(y, x, w, x_vals, y_grid, B_post, T_fwd,
-                                     weighting, seed, w_cond=None):
+                                     weighting, seed):
     y = np.asarray(y)
     n_y = len(y_grid)
-    n_cond = 0 if w_cond is None else len(w_cond)
-    w_cond_jnp = jnp.array(w_cond) if n_cond else None
 
     w_pop = w[x == 1] if weighting == "att" else w
     w_unique, w_inv = np.unique(w_pop, axis=0, return_inverse=True)
@@ -654,10 +645,6 @@ def _mp_density_t_learner_diagnostic(y, x, w, x_vals, y_grid, B_post, T_fwd,
 
     w_emp_counts = np.bincount(w_inv, minlength=n_w).astype(float)
     w_emp_weights = jnp.array(w_emp_counts / w_emp_counts.sum())
-
-    w_grid_jnp = (jnp.concatenate((w_unique_jnp, w_cond_jnp), axis=0)
-                  if n_cond else w_unique_jnp)
-    n_w_tot = n_w + n_cond
 
     # Shared BB covariate sequence (explicit resampling, not Dirichlet)
     n_pop = len(w_pop)
@@ -679,7 +666,6 @@ def _mp_density_t_learner_diagnostic(y, x, w, x_vals, y_grid, B_post, T_fwd,
     shared_w_idx = vmap(_draw_shared_bb)(subkeys_shared)  # (B_post, T_fwd)
 
     marginals = []
-    cond_blocks = []
     l1_all_arms = []
 
     for arm_i, x_val in enumerate(x_vals):
@@ -695,11 +681,11 @@ def _mp_density_t_learner_diagnostic(y, x, w, x_vals, y_grid, B_post, T_fwd,
         rho_opt = fit.rho_opt
         rho_x_opt = fit.rho_x_opt
 
-        y_target, z_target = _build_target_grid([x_val], w_grid_jnp, y_grid)
+        y_target, z_target = _build_target_grid([x_val], w_unique_jnp, y_grid)
         logcdf_init, logpdf_init = predict_copula_cregression(fit, y_target, z_target)
 
-        flat_idx = np.arange(1 * n_w_tot * n_y).reshape(1, n_w_tot, n_y)
-        marginal_idx = jnp.array(flat_idx[:, :n_w, :].transpose(0, 2, 1))  # (1, n_y, n_w)
+        flat_idx = np.arange(1 * n_w * n_y).reshape(1, n_w, n_y)
+        marginal_idx = jnp.array(flat_idx.transpose(0, 2, 1))  # (1, n_y, n_w)
 
         pdf_init_flat = jnp.exp(logpdf_init[:, -1])
         p_n_marginal = jnp.sum(pdf_init_flat[marginal_idx] * w_emp_weights[None, None, :], axis=-1)
@@ -748,28 +734,22 @@ def _mp_density_t_learner_diagnostic(y, x, w, x_vals, y_grid, B_post, T_fwd,
         print(f'Diagnostic resampling for x={x_val}...')
         logpdf_pr, l1_arm, final_counts = vmap(_single_diag_arm)(subkeys_arm, shared_w_idx)
 
-        pdfs = jnp.exp(jnp.squeeze(logpdf_pr)).reshape(B_post, n_w_tot, n_y)
+        pdfs = jnp.exp(jnp.squeeze(logpdf_pr)).reshape(B_post, n_w, n_y)
         final_weights = final_counts / final_counts.sum(axis=1, keepdims=True)
-        marginals.append(jnp.einsum('bw,bwy->by', final_weights, pdfs[:, :n_w, :]))
+        marginals.append(jnp.einsum('bw,bwy->by', final_weights, pdfs))
         l1_all_arms.append(l1_arm)
-        if n_cond:
-            cond_blocks.append(pdfs[:, n_w:, :])
 
     marginal_pdfs = jnp.stack(marginals, axis=1)
     results = _summarize(marginal_pdfs)
 
     l1_trajectory = jnp.concatenate(l1_all_arms, axis=-1)  # (B, T, n_x)
     results['l1_trajectory'] = np.array(l1_trajectory)
-
-    if n_cond:
-        cond_pdfs = jnp.stack(cond_blocks, axis=1)
-        results['conditional'] = _summarize_conditional(cond_pdfs, w_cond)
     return results
 
 
 def mp_causal_density_diagnostic(y, x, w, y_grid, B_post, T_fwd, *,
                                  x_vals=(0, 1), x_update="bb", weighting="ate",
-                                 learner="s", w_cond=None, seed=42):
+                                 learner="s", seed=42):
     if x_update not in ("bb", "logistic"):
         raise ValueError("x_update must be 'bb' or 'logistic'")
     if weighting not in ("ate", "att"):
@@ -792,15 +772,6 @@ def mp_causal_density_diagnostic(y, x, w, y_grid, B_post, T_fwd, *,
     else:
         x_vals = np.asarray(x_vals)
 
-    if w_cond is not None:
-        w_cond = np.asarray(w_cond, dtype=float)
-        if w_cond.ndim == 1:
-            w_cond = w_cond.reshape(1, -1)
-        if w_cond.shape[1] != w.shape[1]:
-            raise ValueError(
-                f"w_cond must have {w.shape[1]} columns to match w; got {w_cond.shape[1]}"
-            )
-
     if x_update == "logistic" or weighting == "att":
         x_levels = set(np.unique(x).tolist())
         if not x_levels.issubset({0, 1}):
@@ -816,7 +787,7 @@ def mp_causal_density_diagnostic(y, x, w, y_grid, B_post, T_fwd, *,
 
     if learner == "t":
         return _mp_density_t_learner_diagnostic(y, x, w, x_vals, y_grid, B_post, T_fwd,
-                                                weighting, seed, w_cond=w_cond)
+                                                weighting, seed)
     return _mp_density_s_learner_diagnostic(y, x, w, x_vals, y_grid, B_post, T_fwd,
-                                            x_update, weighting, seed, w_cond=w_cond)
+                                            x_update, weighting, seed)
 ### ###
