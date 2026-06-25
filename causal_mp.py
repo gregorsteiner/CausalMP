@@ -321,14 +321,16 @@ def _mp_density_t_learner(y, x, w, x_vals, y_grid, B_post, T_fwd, weighting, see
     cond_blocks = []
     for x_val in x_vals:
         mask_arm = x == x_val
-        Z_sub_jnp = jnp.array(np.column_stack((x[mask_arm], w[mask_arm])))
+        Z_sub_jnp = jnp.array(w[mask_arm])
 
         # fit a separate outcome model on this treatment arm
         fit = fit_copula_cregression(jnp.array(y[mask_arm]), Z_sub_jnp,
                                      single_x_bandwidth=False, n_perm_optim=10)
         _print_fit(fit, label=f"x={x_val}")
 
-        y_target, z_target = _build_target_grid([x_val], w_grid_jnp, y_grid)
+        n_w_grid = len(w_grid_jnp)
+        y_target = jnp.tile(jnp.array(y_grid), n_w_grid)
+        z_target = jnp.repeat(w_grid_jnp, n_y, axis=0)
         _, logpdf_pr, _ = predictive_resample_cregression(
             fit, Z_sub_jnp, y_target, z_target, B_post, T_fwd, seed=seed
         )
@@ -672,9 +674,8 @@ def _mp_density_t_learner_diagnostic(y, x, w, x_vals, y_grid, B_post, T_fwd,
     for arm_i, x_val in enumerate(x_vals):
         mask_arm = x == x_val
         y_arm = jnp.array(y[mask_arm])
-        Z_sub = np.column_stack((x[mask_arm], w[mask_arm]))
-        Z_sub_jnp = jnp.array(Z_sub)
-        n_arm = Z_sub.shape[0]
+        Z_sub_jnp = jnp.array(w[mask_arm])
+        n_arm = int(mask_arm.sum())
 
         fit = fit_copula_cregression(y_arm, Z_sub_jnp,
                                      single_x_bandwidth=False, n_perm_optim=10)
@@ -682,7 +683,8 @@ def _mp_density_t_learner_diagnostic(y, x, w, x_vals, y_grid, B_post, T_fwd,
         rho_opt = fit.rho_opt
         rho_x_opt = fit.rho_x_opt
 
-        y_target, z_target = _build_target_grid([x_val], w_unique_jnp, y_grid)
+        y_target = jnp.tile(jnp.array(y_grid), n_w)
+        z_target = jnp.repeat(w_unique_jnp, n_y, axis=0)
         logcdf_init, logpdf_init = predict_copula_cregression(fit, y_target, z_target)
 
         flat_idx = np.arange(1 * n_w * n_y).reshape(1, n_w, n_y)
