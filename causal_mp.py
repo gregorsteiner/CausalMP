@@ -507,7 +507,7 @@ def _mp_density_s_learner_diagnostic(y, x, w, x_vals, y_grid, B_post, T_fwd,
             w_idx, w_msk = _make_w_idx_and_mask(ind_new, w_map, Z_jnp, weighting)
             a_rand = jax.random.uniform(k3, shape=(T_fwd, 1))
 
-            counts_init = jnp.zeros(n_w)
+            counts_init = jnp.array(w_emp_counts)
             l1_init = jnp.zeros((T_fwd, n_x))
 
             def step(i, carry):
@@ -576,7 +576,7 @@ def _mp_density_s_learner_diagnostic(y, x, w, x_vals, y_grid, B_post, T_fwd,
 
         def _single_diag_logistic(subkey, z_samp, w_idx, w_msk):
             a_rand = jax.random.uniform(subkey, shape=(T_fwd, 1))
-            counts_init = jnp.zeros(n_w)
+            counts_init = jnp.array(w_emp_counts)
             l1_init = jnp.zeros((T_fwd, n_x))
 
             def step(i, carry):
@@ -622,6 +622,7 @@ def _mp_density_s_learner_diagnostic(y, x, w, x_vals, y_grid, B_post, T_fwd,
     marginal_pdfs = jnp.einsum('bw,bxwy->bxy', final_weights, pdfs)
 
     results = _summarize(marginal_pdfs)
+    l1_trajectory = jnp.concatenate([jnp.zeros((B_post, 1, n_x)), l1_trajectory], axis=1)
     results['l1_trajectory'] = np.array(l1_trajectory)
 
     if weighting == "att" and x_update == "bb":
@@ -701,7 +702,7 @@ def _mp_density_t_learner_diagnostic(y, x, w, x_vals, y_grid, B_post, T_fwd,
             z_samp = jnp.concatenate((Z_sub_jnp, z_new), axis=0)
 
             a_rand = jax.random.uniform(k3, shape=(T_fwd, 1))
-            counts_init = jnp.zeros(n_w)
+            counts_init = jnp.array(w_emp_counts)
             l1_init = jnp.zeros((T_fwd, 1))
 
             def step(i, carry):
@@ -743,6 +744,7 @@ def _mp_density_t_learner_diagnostic(y, x, w, x_vals, y_grid, B_post, T_fwd,
     results = _summarize(marginal_pdfs)
 
     l1_trajectory = jnp.concatenate(l1_all_arms, axis=-1)  # (B, T, n_x)
+    l1_trajectory = jnp.concatenate([jnp.zeros((B_post, 1, n_x)), l1_trajectory], axis=1)
     results['l1_trajectory'] = np.array(l1_trajectory)
     return results
 
