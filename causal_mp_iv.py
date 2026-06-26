@@ -45,83 +45,66 @@ def bayesian_bootstrap(n, T_fwd, rng):
 
 ### Instrumental variable approach to binary outcome estimation for compliers ###
 # Uses Bayesian bootstrap directly on (y, x, z) triplets to estimate probabilities
-def mp_compliers(y, x, z, B_post, T_fwd, seed=42):    
+def mp_compliers(y, x, z, B_post, T_fwd, n_checkpoints=50, seed=42):
     """
     Estimate P(Y(0)=1|C) and P(Y(1)=1|C) for compliers using Bayesian bootstrap.
-    
-    Parameters:
-    -----------
-    y : array-like
-        Binary outcome variable (0/1)
-    x : array-like
-        Binary treatment variable (0/1)
-    z : array-like
-        Binary instrument variable (0/1)
-    B_post : int
-        Number of Bayesian bootstrap samples
-    T_fwd : int
-        Number of forward samples
-    seed : int
-        Random seed
+    Records running estimates at checkpoints along nested bootstrap sequences.
+
+    Returns dict with keys 'Control', 'Treatment', 'Complier' (each shape
+    (B_post, n_checkpoints)) and 'checkpoints' (the observation counts).
     """
-    # Convert to numpy arrays
     y_arr = np.asarray(y)
     x_arr = np.asarray(x)
     z_arr = np.asarray(z)
-    
     n = len(y_arr)
-    
-    # Initialize random number generator
+
     rng = np.random.RandomState(seed)
-    
-    # Storage for posterior samples
-    prob_y0_samples = np.zeros(B_post)
-    prob_y1_samples = np.zeros(B_post)
-    complier_prob = np.zeros(B_post)
-    
-    # Bayesian bootstrap loop
+
+    checkpoints = np.unique(np.linspace(n, n + T_fwd, n_checkpoints).astype(int))
+    n_cp = len(checkpoints)
+
+    ctrl_traj = np.zeros((B_post, n_cp))
+    trt_traj = np.zeros((B_post, n_cp))
+    comp_traj = np.zeros((B_post, n_cp))
+
     for b in range(B_post):
-        # Resample (y, x, z) according to the Bayesian bootstrap
         indices = bayesian_bootstrap(n, T_fwd, rng)
-        y_boot = y_arr[indices]
-        x_boot = x_arr[indices]
-        z_boot = z_arr[indices]
+        y_full = y_arr[indices]
+        x_full = x_arr[indices]
+        z_full = z_arr[indices]
 
-        # type probabilities
-        p_A = np.mean(x_boot[z_boot == 0])  # Prob treated when Z=0
-        p_N = 1.0 - np.mean(x_boot[z_boot == 1])  # Prob untreated when Z=1
-        p_C = (1 - p_A - p_N)
+        for j, cp in enumerate(checkpoints):
+            yb = y_full[:cp]
+            xb = x_full[:cp]
+            zb = z_full[:cp]
 
-        # Compute conditional probabilities from bootstrap sample
-        # P(Y=1|X=x, Z=z)
-        mask_x0_z0 = (x_boot == 0) & (z_boot == 0)
-        mask_x0_z1 = (x_boot == 0) & (z_boot == 1)
-        mask_x1_z0 = (x_boot == 1) & (z_boot == 0)
-        mask_x1_z1 = (x_boot == 1) & (z_boot == 1)
-        
-        # Compute probabilities
-        p_y1_x0_z0_b = np.mean(y_boot[mask_x0_z0])
-        p_y1_x0_z1_b = np.mean(y_boot[mask_x0_z1]) if p_N > 0 else 0
-        p_y1_x1_z0_b = np.mean(y_boot[mask_x1_z0]) if p_A > 0 else 0
-        p_y1_x1_z1_b = np.mean(y_boot[mask_x1_z1])
-        
-        prob_y0_b = ((p_N + p_C) / p_C) * p_y1_x0_z0_b - p_N / p_C * p_y1_x0_z1_b
-        prob_y1_b = ((p_A + p_C) / p_C) * p_y1_x1_z1_b - p_A / p_C * p_y1_x1_z0_b
-        
-        # Ensure probabilities are in [0, 1]
-        prob_y0_samples[b] = np.clip(prob_y0_b, 0, 1)
-        prob_y1_samples[b] = np.clip(prob_y1_b, 0, 1)
-        complier_prob[b] = np.clip(p_C, 0, 1)
-    
-    # Compute quantiles and means across posterior samples
-    results = {
-        'Control': prob_y0_samples,
-        'Treatment': prob_y1_samples,
-        'Complier': complier_prob
+            p_A = np.mean(xb[zb == 0]) if np.any(zb == 0) else 0.0
+            p_N = 1.0 - np.mean(xb[zb == 1]) if np.any(zb == 1) else 0.0
+            p_C = np.clip(1 - p_A - p_N, 1e-10, 1.0)
+
+            mask_x0_z0 = (xb == 0) & (zb == 0)
+            mask_x0_z1 = (xb == 0) & (zb == 1)
+            mask_x1_z0 = (xb == 1) & (zb == 0)
+            mask_x1_z1 = (xb == 1) & (zb == 1)
+
+            p_y1_x0_z0 = np.mean(yb[mask_x0_z0]) if np.any(mask_x0_z0) else 0.0
+            p_y1_x0_z1 = np.mean(yb[mask_x0_z1]) if np.any(mask_x0_z1) else 0.0
+            p_y1_x1_z0 = np.mean(yb[mask_x1_z0]) if np.any(mask_x1_z0) else 0.0
+            p_y1_x1_z1 = np.mean(yb[mask_x1_z1]) if np.any(mask_x1_z1) else 0.0
+
+            prob_y0 = ((p_N + p_C) / p_C) * p_y1_x0_z0 - p_N / p_C * p_y1_x0_z1
+            prob_y1 = ((p_A + p_C) / p_C) * p_y1_x1_z1 - p_A / p_C * p_y1_x1_z0
+
+            ctrl_traj[b, j] = np.clip(prob_y0, 0, 1)
+            trt_traj[b, j] = np.clip(prob_y1, 0, 1)
+            comp_traj[b, j] = np.clip(p_C, 0, 1)
+
+    return {
+        'Control': ctrl_traj,
+        'Treatment': trt_traj,
+        'Complier': comp_traj,
+        'checkpoints': checkpoints,
     }
-    
-    return results
-
 
 
 ### Modified Predictive Resampling for IV Approach ###
