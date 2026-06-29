@@ -48,10 +48,11 @@ def bayesian_bootstrap(n, T_fwd, rng):
 def mp_compliers(y, x, z, B_post, T_fwd, n_checkpoints=50, seed=42):
     """
     Estimate P(Y(0)=1|C) and P(Y(1)=1|C) for compliers using Bayesian bootstrap.
-    Records running estimates at checkpoints along nested bootstrap sequences.
+    Uses recursive mean updates so each new observation is O(1).
+    Vectorised across B_post: only loops over T_fwd.
 
     Returns dict with keys 'Control', 'Treatment', 'Complier' (each shape
-    (B_post, n_checkpoints)) and 'checkpoints' (the observation counts).
+    (B_post, n_checkpoints)) and 'checkpoints' (the forward step indices).
     """
     y_arr = np.asarray(y)
     x_arr = np.asarray(x)
@@ -60,44 +61,101 @@ def mp_compliers(y, x, z, B_post, T_fwd, n_checkpoints=50, seed=42):
 
     rng = np.random.RandomState(seed)
 
-    checkpoints = np.unique(np.linspace(n, n + T_fwd, n_checkpoints).astype(int))
+    # Draw all B_post bootstrap samples at once: (B_post, n + T_fwd)
+    weights = rng.dirichlet(np.ones(n), size=B_post)  # (B_post, n)
+    base = np.tile(np.arange(n), (B_post, 1))  # (B_post, n)
+    extra = np.array([rng.choice(n, size=T_fwd, p=w) for w in weights])  # (B_post, T_fwd)
+    all_indices = np.concatenate([base, extra], axis=1)  # (B_post, n + T_fwd)
+
+    y_full = y_arr[all_indices]  # (B_post, n + T_fwd)
+    x_full = x_arr[all_indices]
+    z_full = z_arr[all_indices]
+
+    # Initialise accumulators from the first n observations (vectorised)
+    yb, xb, zb = y_full[:, :n], x_full[:, :n], z_full[:, :n]
+    is_z0_init = (zb == 0)
+    is_z1_init = (zb == 1)
+
+    cnt_z0 = is_z0_init.sum(axis=1).astype(float)  # (B_post,)
+    cnt_z1 = is_z1_init.sum(axis=1).astype(float)
+    sum_x_z0 = (xb * is_z0_init).sum(axis=1).astype(float)
+    sum_x_z1 = (xb * is_z1_init).sum(axis=1).astype(float)
+
+    m_x0z0 = (xb == 0) & is_z0_init
+    m_x0z1 = (xb == 0) & is_z1_init
+    m_x1z0 = (xb == 1) & is_z0_init
+    m_x1z1 = (xb == 1) & is_z1_init
+
+    cnt_x0z0 = m_x0z0.sum(axis=1).astype(float)
+    cnt_x0z1 = m_x0z1.sum(axis=1).astype(float)
+    cnt_x1z0 = m_x1z0.sum(axis=1).astype(float)
+    cnt_x1z1 = m_x1z1.sum(axis=1).astype(float)
+    sum_y_x0z0 = (yb * m_x0z0).sum(axis=1).astype(float)
+    sum_y_x0z1 = (yb * m_x0z1).sum(axis=1).astype(float)
+    sum_y_x1z0 = (yb * m_x1z0).sum(axis=1).astype(float)
+    sum_y_x1z1 = (yb * m_x1z1).sum(axis=1).astype(float)
+
+    checkpoints = np.unique(np.linspace(0, T_fwd - 1, n_checkpoints).astype(int))
+    checkpoint_set = set(checkpoints)
     n_cp = len(checkpoints)
 
     ctrl_traj = np.zeros((B_post, n_cp))
     trt_traj = np.zeros((B_post, n_cp))
     comp_traj = np.zeros((B_post, n_cp))
 
-    for b in range(B_post):
-        indices = bayesian_bootstrap(n, T_fwd, rng)
-        y_full = y_arr[indices]
-        x_full = x_arr[indices]
-        z_full = z_arr[indices]
+    # Forward-sample T_fwd observations, updating all B_post sequences per step
+    cp_idx = 0
+    for j in range(T_fwd):
+        yi = y_full[:, n + j]  # (B_post,)
+        xi = x_full[:, n + j]
+        zi = z_full[:, n + j]
 
-        for j, cp in enumerate(checkpoints):
-            yb = y_full[:cp]
-            xb = x_full[:cp]
-            zb = z_full[:cp]
+        is_z0 = (zi == 0)
+        is_z1 = ~is_z0
+        is_x0 = (xi == 0)
+        is_x1 = ~is_x0
 
-            p_A = np.mean(xb[zb == 0]) if np.any(zb == 0) else 0.0
-            p_N = 1.0 - np.mean(xb[zb == 1]) if np.any(zb == 1) else 0.0
-            p_C = np.clip(1 - p_A - p_N, 1e-10, 1.0)
+        cnt_z0 += is_z0
+        cnt_z1 += is_z1
+        sum_x_z0 += xi * is_z0
+        sum_x_z1 += xi * is_z1
 
-            mask_x0_z0 = (xb == 0) & (zb == 0)
-            mask_x0_z1 = (xb == 0) & (zb == 1)
-            mask_x1_z0 = (xb == 1) & (zb == 0)
-            mask_x1_z1 = (xb == 1) & (zb == 1)
+        cnt_x0z0 += is_x0 & is_z0
+        cnt_x0z1 += is_x0 & is_z1
+        cnt_x1z0 += is_x1 & is_z0
+        cnt_x1z1 += is_x1 & is_z1
+        sum_y_x0z0 += yi * (is_x0 & is_z0)
+        sum_y_x0z1 += yi * (is_x0 & is_z1)
+        sum_y_x1z0 += yi * (is_x1 & is_z0)
+        sum_y_x1z1 += yi * (is_x1 & is_z1)
 
-            p_y1_x0_z0 = np.mean(yb[mask_x0_z0]) if np.any(mask_x0_z0) else 0.0
-            p_y1_x0_z1 = np.mean(yb[mask_x0_z1]) if np.any(mask_x0_z1) else 0.0
-            p_y1_x1_z0 = np.mean(yb[mask_x1_z0]) if np.any(mask_x1_z0) else 0.0
-            p_y1_x1_z1 = np.mean(yb[mask_x1_z1]) if np.any(mask_x1_z1) else 0.0
+        if j not in checkpoint_set:
+            continue
 
-            prob_y0 = ((p_N + p_C) / p_C) * p_y1_x0_z0 - p_N / p_C * p_y1_x0_z1
-            prob_y1 = ((p_A + p_C) / p_C) * p_y1_x1_z1 - p_A / p_C * p_y1_x1_z0
+        # avoid division by zero counts
+        safe_z0 = np.maximum(cnt_z0, 1)
+        safe_z1 = np.maximum(cnt_z1, 1)
+        safe_x0z0 = np.maximum(cnt_x0z0, 1)
+        safe_x0z1 = np.maximum(cnt_x0z1, 1)
+        safe_x1z0 = np.maximum(cnt_x1z0, 1)
+        safe_x1z1 = np.maximum(cnt_x1z1, 1)
 
-            ctrl_traj[b, j] = np.clip(prob_y0, 0, 1)
-            trt_traj[b, j] = np.clip(prob_y1, 0, 1)
-            comp_traj[b, j] = np.clip(p_C, 0, 1)
+        p_A = np.where(cnt_z0 > 0, sum_x_z0 / safe_z0, 0.0)
+        p_N = np.where(cnt_z1 > 0, 1.0 - sum_x_z1 / safe_z1, 0.0)
+        p_C = np.clip(1 - p_A - p_N, 1e-10, 1.0)
+
+        p_y1_x0_z0 = np.where(cnt_x0z0 > 0, sum_y_x0z0 / safe_x0z0, 0.0)
+        p_y1_x0_z1 = np.where(cnt_x0z1 > 0, sum_y_x0z1 / safe_x0z1, 0.0)
+        p_y1_x1_z0 = np.where(cnt_x1z0 > 0, sum_y_x1z0 / safe_x1z0, 0.0)
+        p_y1_x1_z1 = np.where(cnt_x1z1 > 0, sum_y_x1z1 / safe_x1z1, 0.0)
+
+        prob_y0 = ((p_N + p_C) / p_C) * p_y1_x0_z0 - p_N / p_C * p_y1_x0_z1
+        prob_y1 = ((p_A + p_C) / p_C) * p_y1_x1_z1 - p_A / p_C * p_y1_x1_z0
+
+        ctrl_traj[:, cp_idx] = np.clip(prob_y0, 0, 1)
+        trt_traj[:, cp_idx] = np.clip(prob_y1, 0, 1)
+        comp_traj[:, cp_idx] = np.clip(p_C, 0, 1)
+        cp_idx += 1
 
     return {
         'Control': ctrl_traj,
