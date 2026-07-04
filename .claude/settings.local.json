@@ -6,7 +6,16 @@
       "PowerShell(Copy-Item \"$env:USERPROFILE\\\\Downloads\\\\2211.01591v1 \\(1\\).pdf\" \"C:\\\\GitHub\\\\PostBayesIV\\\\_paper_tmp.pdf\"; Test-Path \"C:\\\\GitHub\\\\PostBayesIV\\\\_paper_tmp.pdf\")",
       "PowerShell(python -c \"import pypdf; print\\('pypdf', pypdf.__version__\\)\" 2>$null)",
       "PowerShell(python -c \"import pdfplumber; print\\('pdfplumber ok'\\)\" 2>$null)",
-      "PowerShell(python -c \"import fitz; print\\('pymupdf ok'\\)\" 2>$null)"
+      "PowerShell(python -c \"import fitz; print\\('pymupdf ok'\\)\" 2>$null)",
+      "Bash(python -c \"import pr_copula, os; print\\(os.path.dirname\\(pr_copula.__file__\\)\\)\")",
+      "Bash(pip show *)",
+      "Bash(jupyter nbconvert *)",
+      "Bash(mkdir -p \"/c/Users/u5520910/.claude/plans\")",
+      "Bash(ls \"/c/Users/u5520910/.claude/plans/\" | tail -20)",
+      "Bash(find / -name \"zi_mixture_test.png\" 2>/dev/null)",
+      "Bash(cygpath -w /tmp)",
+      "Bash(cp /tmp/zi_mixture_test.png \"/c/Users/u5520910/AppData/Local/Temp/claude/C--GitHub-PostBayesIV/6fc6877e-e6d2-460f-90e3-48047c6a9867/scratchpad/zi_mixture_test.png\" && ls -la \"/c/Users/u5520910/AppData/Local/Temp/claude/C--GitHub-PostBayesIV/6fc6877e-e6d2-460f-90e3-48047c6a9867/scratchpad/\")",
+      "Bash(find / -iname \"*zi_mixture*\" 2>/dev/null; echo done)"
     ]
   }
 }
