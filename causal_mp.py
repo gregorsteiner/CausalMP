@@ -1025,6 +1025,11 @@ def _mp_density_zi_s_learner_impl(y, x, w, x_vals, y_grid, B_post, T_fwd,
     pdfs_pos = jnp.exp(jnp.squeeze(logpdf_pr)).reshape(B_post, n_x, n_w, n_y)
     marginal_pdfs_pos = jnp.einsum('bw,bxwy->bxy', final_weights, pdfs_pos)
     results = _summarize(marginal_pdfs_pos)
+    # raw per-draw continuous density (integrates to 1 over y, i.e. NOT yet scaled by (1 - p0)),
+    # kept alongside the summarized version so callers can combine it with the raw per-draw
+    # p0_marginal below (e.g. to compute a posterior of E[Y(x)] or the ATT) without having to
+    # redo the marginalisation over w.
+    results['marginal_pdfs_pos'] = np.array(marginal_pdfs_pos)
 
     # zero-atom posterior P(Y=y0 | X=x_val), marginalised over w with the same weights used
     # for the continuous part
@@ -1042,6 +1047,7 @@ def _mp_density_zi_s_learner_impl(y, x, w, x_vals, y_grid, B_post, T_fwd,
             'high': float(jnp.quantile(p0_i, 0.975)),
         }
     results['p0'] = p0_results
+    results['p0_marginal'] = np.array(p0_marginal)  # (B_post, n_x), raw per-draw P(Y=y0|X=x_val)
 
     if diagnostic:
         l1_trajectory = jnp.concatenate([jnp.zeros((B_post, 1, n_x)), l1_trajectory], axis=1)
@@ -1077,7 +1083,11 @@ def _validate_zi_args(x, x_vals, x_update, weighting, caller):
 # Returns the same "x_i" continuous-density entries as mp_causal_density (marginalised over
 # the non-atom part only, i.e. these integrate to 1 over y, NOT (1 - p0)), plus a "p0" entry
 # with the posterior of P(Y=y0 | X=x_val) for each x_val. Combining the atom and the
-# continuous part into a single mixture density for plotting is left to the caller.
+# continuous part into a single mixture density for plotting is left to the caller. Also
+# returns raw (non-summarized, per posterior draw) "marginal_pdfs_pos" (B_post, n_x, n_y) and
+# "p0_marginal" (B_post, n_x) arrays, so the caller can combine them into a posterior of the
+# mixture mean E[Y(x)] = (1 - p0) * E[Y(x) | Y(x) != y0] + p0 * y0 (e.g. for an ATT posterior)
+# without redoing the marginalisation over w.
 def mp_causal_density_zi(y, x, w, y_grid, B_post, T_fwd, *,
                          x_vals=(0, 1), x_update="bb", weighting="ate", y0=0.0, seed=42):
     w = np.asarray(w)

@@ -15,7 +15,10 @@
       "Bash(find / -name \"zi_mixture_test.png\" 2>/dev/null)",
       "Bash(cygpath -w /tmp)",
       "Bash(cp /tmp/zi_mixture_test.png \"/c/Users/u5520910/AppData/Local/Temp/claude/C--GitHub-PostBayesIV/6fc6877e-e6d2-460f-90e3-48047c6a9867/scratchpad/zi_mixture_test.png\" && ls -la \"/c/Users/u5520910/AppData/Local/Temp/claude/C--GitHub-PostBayesIV/6fc6877e-e6d2-460f-90e3-48047c6a9867/scratchpad/\")",
-      "Bash(find / -iname \"*zi_mixture*\" 2>/dev/null; echo done)"
+      "Bash(find / -iname \"*zi_mixture*\" 2>/dev/null; echo done)",
+      "Bash(python -c \" *)",
+      "Bash(python3 -c ' *)",
+      "PowerShell(Test-Path \"$env:LOCALAPPDATA\\\\Temp\\\\claude\\\\C--GitHub-PostBayesIV\\\\6fc6877e-e6d2-460f-90e3-48047c6a9867\\\\scratchpad\\\\lalonde_smoke.pkl\")"
     ]
   }
 }
