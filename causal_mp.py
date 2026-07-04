@@ -33,15 +33,52 @@ def logistic_fisher_info(beta, W_aug):
 ### ###
 
 
-# Recursively generate a length-T sequence of (x, w) pairs for a single predictive sequence:
-#   - w is resampled from the original covariates via the Bayesian bootstrap (Dirichlet weights)
-#   - x is drawn from a logistic model whose coefficients are updated at each step via the
-#     natural gradient, using running score and Fisher-information accumulators that are
-#     initialised from the original n observations and updated with each new draw.
-#     This avoids the rank-1 singularity of a single-observation Fisher information matrix:
-#     the accumulator F_t = F_{t-1} + p_t(1-p_t) w_t w_t^T is full rank from the start
-#     (because F_0 from the original n observations is already full rank), and grows
-#     richer with every additional draw.  The natural-gradient step is discounted by 1/(n+t).
+# Shared recursion: coefficients are updated at each step via the natural gradient, using
+# running score and Fisher-information accumulators that are initialised from the original
+# n observations and updated with each new draw. This avoids the rank-1 singularity of a
+# single-observation Fisher information matrix: the accumulator F_t = F_{t-1} + p_t(1-p_t) w_t w_t^T
+# is full rank from the start (because F_0 from the original n observations is already full
+# rank), and grows richer with every additional draw. The natural-gradient step is discounted
+# by 1/(n+t).
+# Given an *already presampled* augmented covariate sequence
+# Z_new_aug (T, p+1), recursively natural-gradient-update a logistic model and draw a
+# Bernoulli response at each step. Used both for the treatment natural-gradient update
+# (w resampled internally, below) and for the zero-inflation indicator update (covariates
+# presampled from the treatment/covariate resampling step, see mp_causal_density_zi).
+def _logistic_nat_grad_step_presampled(key, Z_new_aug, Z_orig_aug, y_orig, beta_init, n, T):
+    S_0 = logistic_score(beta_init, Z_orig_aug, y_orig)   # total score: (p+1,)
+    F_0 = logistic_fisher_info(beta_init, Z_orig_aug)      # total Fisher info: (p+1, p+1)
+
+    def step(carry, inputs):
+        beta, S, F, key = carry
+        t, z_t = inputs
+
+        key, subkey = split(key)
+        p_t = jax.nn.sigmoid(z_t @ beta)
+        y_t = bernoulli(subkey, p_t).astype(beta.dtype)
+
+        # update running accumulators with the new observation
+        S_new = S + logistic_score(beta, z_t, y_t)
+        F_new = F + p_t * (1.0 - p_t) * jnp.outer(z_t, z_t)
+
+        nat_grad = jnp.linalg.solve(F_new, S_new)
+        eta_t = 1.0 / (n + t + 1.0)
+        beta_new = beta + eta_t * nat_grad
+
+        return (beta_new, S_new, F_new, key), y_t
+
+    (beta_final, _, _, _), y_new = scan(
+        step, (beta_init, S_0, F_0, key), (jnp.arange(T, dtype=beta_init.dtype), Z_new_aug)
+    )
+
+    return y_new, beta_final
+
+
+_logistic_nat_grad_step_presampled_B = vmap(
+    _logistic_nat_grad_step_presampled, (0, 0, None, None, None, None, None)
+)
+
+
 def _logistic_nat_grad_sequence(key, w_pool, W_orig_aug, x_orig, beta_init, n, T):
     n_pool = jnp.shape(w_pool)[0]
 
@@ -53,32 +90,8 @@ def _logistic_nat_grad_sequence(key, w_pool, W_orig_aug, x_orig, beta_init, n, T
     w_new = w_pool[ind_w]
     w_new_aug = jnp.concatenate((jnp.ones((T, 1)), w_new), axis=1)
 
-    # Initialise accumulators from the original n observations evaluated at beta_init.
-    # At the MLE, S_0 is ~0 by definition; we compute it explicitly so the recursion
-    # is correct even if beta_init is not the exact MLE.
-    S_0 = logistic_score(beta_init, W_orig_aug, x_orig)   # total score: (p+1,)
-    F_0 = logistic_fisher_info(beta_init, W_orig_aug)      # total Fisher info: (p+1, p+1)
-
-    def step(carry, inputs):
-        beta, S, F, key = carry
-        t, w_t = inputs
-
-        key, subkey = split(key)
-        p_t = jax.nn.sigmoid(w_t @ beta)
-        x_t = bernoulli(subkey, p_t).astype(beta.dtype)
-
-        # update running accumulators with the new observation
-        S_new = S + logistic_score(beta, w_t, x_t)
-        F_new = F + p_t * (1.0 - p_t) * jnp.outer(w_t, w_t)
-
-        nat_grad = jnp.linalg.solve(F_new, S_new)
-        eta_t = 1.0 / (n + t + 1.0)
-        beta_new = beta + eta_t * nat_grad
-
-        return (beta_new, S_new, F_new, key), x_t
-
-    (beta_final, _, _, _), x_new = scan(
-        step, (beta_init, S_0, F_0, key), (jnp.arange(T, dtype=beta_init.dtype), w_new_aug)
+    x_new, beta_final = _logistic_nat_grad_step_presampled(
+        key, w_new_aug, W_orig_aug, x_orig, beta_init, n, T
     )
 
     return x_new, w_new, beta_final
@@ -794,4 +807,314 @@ def mp_causal_density_diagnostic(y, x, w, y_grid, B_post, T_fwd, *,
                                                 weighting, seed)
     return _mp_density_s_learner_diagnostic(y, x, w, x_vals, y_grid, B_post, T_fwd,
                                             x_update, weighting, seed)
+### ###
+
+
+### Zero-inflated mixture: point mass at y0 plus a continuous copula-regression part ###
+#
+# Motivated by the Lalonde job-training data, where the outcome (re78) has a large point
+# mass at zero (unemployed participants). The Gaussian-copula recursion works purely in
+# CDF-value space and assumes an absolutely continuous marginal (see update_copula_single in
+# pr_copula/copula_density_functions.py); feeding a point mass through it corrupts both the
+# bandwidth fit and the stationarity of the forward-resampling walk. Here Y is modelled as a
+# mixture: P(Y=y0|x,w) via a simple recursively (natural-gradient) updated logistic
+# regression -- reusing the same recursion used for the treatment logistic update above --
+# and Y|Y!=y0,x,w via the existing copula-regression treatment, fit only on the non-atom
+# subsample. Since the response is never literally copied from history in this scheme (even
+# under x_update="bb" the new y is generated from the copula's own evolving state via a
+# fresh uniform quantile draw, not from the bootstrapped row's actual y -- see
+# pr_copula/sample_copula_regression_functions.py), the atom/continuous decision at each
+# forward step must also come from a live model rather than from the resampled row's
+# original y.
+#
+# Only the S-learner is supported (matches the Lalonde ATT use case); T-learner support
+# would need a separate zero-model and continuous model per treatment arm.
+
+# Single forward-resampling loop (one posterior sequence) for the continuous submodel,
+# gated by the zero-model draws is_zero_b. The martingale step-size schedule is keyed to
+# j_cont, a running count of *continuous* draws seen so far (initialised at n_pos, the
+# number of non-atom observations used to fit the continuous submodel): atom draws must not
+# advance the continuous submodel's effective sample size. On atom steps the continuous
+# cdf/pdf state is left exactly unchanged via jnp.where -- deliberately not relying on
+# alpha_x -> 0 as a no-op, since logalpha_x is clipped away from -inf for numerical stability
+# a few lines below and would otherwise leak a small update in on every atom step.
+def _zi_forward_step_loop(subkey, z_samp_b, is_zero_b, rho_pos, rho_x_pos, z_target,
+                          n_pos, T_fwd, logcdf_init, logpdf_init,
+                          w_idx_b=None, w_msk_b=None, w_emp_counts=None, n_w=None,
+                          p_n_marginal_pos=None, marginal_idx=None, diagnostic=False):
+    a_rand = jax.random.uniform(subkey, shape=(T_fwd, 1))
+
+    if diagnostic:
+        n_x = marginal_idx.shape[0]
+        counts_init = jnp.array(w_emp_counts)
+        l1_init = jnp.zeros((T_fwd, n_x))
+    else:
+        counts_init = jnp.zeros(0)
+        l1_init = jnp.zeros(0)
+
+    def step(i, carry):
+        logcdf, logpdf, j_cont, counts, l1_dists = carry
+        z_new_i = z_samp_b[i]
+        is_zero_i = is_zero_b[i]
+
+        logalpha = jnp.log(2.0 - 1.0 / (j_cont + 1.0)) - jnp.log(j_cont + 2.0)
+        logk_xx = _calc_logkxx(z_target, z_new_i, rho_x_pos)
+        logalphak_xx = logalpha + logk_xx
+        log1alpha = jnp.log1p(-jnp.exp(logalpha))
+        logalpha_x = logalphak_xx - jnp.logaddexp(log1alpha, logalphak_xx)
+        eps = 1e-4
+        logalpha_x = jnp.clip(logalpha_x, jnp.log(eps), jnp.log(1 - eps))
+
+        u = jnp.exp(logcdf)
+        v = a_rand[i]
+        logcdf_upd, logpdf_upd = _copula_update_reg(logcdf, logpdf, u, v, logalpha_x, rho_pos)
+
+        is_zero_mask = is_zero_i > 0.5
+        logcdf_new = jnp.where(is_zero_mask, logcdf, logcdf_upd)
+        logpdf_new = jnp.where(is_zero_mask, logpdf, logpdf_upd)
+        j_cont_new = j_cont + (1.0 - is_zero_i)
+
+        if diagnostic:
+            counts = counts.at[w_idx_b[i]].add(w_msk_b[i])
+            total = counts.sum()
+            weights = jnp.where(total > 0, counts / total, jnp.ones(n_w) / n_w)
+            pdf_flat = jnp.exp(logpdf_new[:, -1])
+            pdf_sel = pdf_flat[marginal_idx]
+            marginal = jnp.sum(pdf_sel * weights[None, None, :], axis=-1)
+            l1 = jnp.sum(jnp.abs(marginal - p_n_marginal_pos), axis=-1)
+            l1_dists = l1_dists.at[i].set(l1)
+
+        return logcdf_new, logpdf_new, j_cont_new, counts, l1_dists
+
+    init_carry = (logcdf_init, logpdf_init, jnp.asarray(float(n_pos)), counts_init, l1_init)
+    logcdf_f, logpdf_f, j_cont_f, final_counts, l1_dists = fori_loop(0, T_fwd, step, init_carry)
+    return logpdf_f, final_counts, l1_dists
+
+
+# Covariate-bucket index/mask for a resampled (x, w) sequence, used to accumulate the running
+# ATT/ATE covariate weights inside the diagnostic loop. Mirrors the two branches already used
+# in _mp_density_s_learner_diagnostic (bb: historical row indices via _make_w_idx_and_mask;
+# logistic: match freshly-drawn w rows against the unique covariate grid).
+def _zi_w_idx_mask(x_update, weighting, w_unique_jnp, w_map=None, ind_new_pr=None, Z_jnp=None,
+                   sampled_x=None, sampled_w=None):
+    if x_update == "bb":
+        return _make_w_idx_and_mask(ind_new_pr, w_map, Z_jnp, weighting)
+    matched = jnp.all(sampled_w[:, :, None, :] == w_unique_jnp[None, None, :, :], axis=-1)
+    w_idx = jnp.argmax(matched, axis=-1)
+    if weighting == "att":
+        w_msk = (sampled_x == 1).astype(jnp.float32) * jnp.any(matched, axis=-1).astype(jnp.float32)
+    else:
+        w_msk = jnp.ones_like(sampled_x)
+    return w_idx, w_msk
+
+
+def _mp_density_zi_s_learner_impl(y, x, w, x_vals, y_grid, B_post, T_fwd,
+                                  x_update, weighting, y0, seed, diagnostic):
+    Z = np.column_stack((x, w))
+    n = Z.shape[0]
+    y_np = np.asarray(y)
+    is_zero_orig = (y_np == y0)
+    n_pos = int((~is_zero_orig).sum())
+    if n_pos == 0 or int(is_zero_orig.sum()) == 0:
+        raise ValueError(f"y0={y0} must have both atom and non-atom observations present")
+    print(f"Zero-atom rate at y0={y0}: {is_zero_orig.mean():.4f} ({int(is_zero_orig.sum())}/{n})")
+
+    Z_jnp = jnp.array(Z)
+    y_pos_jnp = jnp.array(y_np[~is_zero_orig])
+    Z_pos_jnp = jnp.array(Z[~is_zero_orig])
+
+    # continuous submodel: fit only on the non-atom subsample
+    fit_pos = fit_copula_cregression(y_pos_jnp, Z_pos_jnp, single_x_bandwidth=False, n_perm_optim=10)
+    _print_fit(fit_pos, label="continuous part (Y != y0)")
+
+    # zero-atom submodel: simple logistic regression of 1(Y=y0) on (x, w), recursively
+    # natural-gradient-updated during forward resampling using the SAME (x, w) draws as the
+    # treatment/covariate resampling below
+    Z_aug = sm.add_constant(Z, has_constant='add')
+    zero_logit_fit = sm.Logit(is_zero_orig.astype(float), Z_aug).fit(disp=False)
+    beta_zero_init = jnp.array(np.asarray(zero_logit_fit.params))
+    Z_aug_jnp = jnp.array(np.asarray(Z_aug))
+    is_zero_orig_jnp = jnp.array(is_zero_orig.astype(float))
+
+    w_pop = w[x == 1] if weighting == "att" else w
+    w_unique, w_pop_inv = np.unique(w_pop, axis=0, return_inverse=True)
+    w_unique_jnp = jnp.array(w_unique)
+    n_w, n_x, n_y = len(w_unique_jnp), len(x_vals), len(y_grid)
+
+    y_target, z_target = _build_target_grid(x_vals, w_unique_jnp, y_grid)
+    logcdf_init_pos, logpdf_init_pos = predict_copula_cregression(fit_pos, y_target, z_target)
+
+    key = PRNGKey(seed)
+    key, *subkeys_cov = split(key, B_post + 1)
+    subkeys_cov = jnp.array(subkeys_cov)
+
+    prop_scores = None
+    ind_new_pr = None
+    w_map = _compute_w_map(x, w, w_unique, weighting)
+
+    if x_update == "bb":
+        def _bb_resample(subkey):
+            k1, k2 = split(subkey)
+            bb_w = dirichlet(k1, jnp.ones(n))
+            return choice(k2, a=jnp.arange(n), p=bb_w, shape=(T_fwd,))
+        ind_new_pr = vmap(_bb_resample)(subkeys_cov)          # (B_post, T_fwd)
+        sampled_x = Z_jnp[ind_new_pr, 0]
+        sampled_w = Z_jnp[ind_new_pr, 1:]
+    else:  # x_update == "logistic"
+        W_aug = sm.add_constant(w, has_constant='add')
+        logit_fit_x = sm.Logit(x, W_aug).fit(disp=False)
+        beta_init_x = jnp.array(np.asarray(logit_fit_x.params))
+        w_jnp = jnp.array(w)
+        W_aug_jnp = jnp.array(np.asarray(W_aug))
+        x_orig_jnp = jnp.array(np.asarray(x).astype(float))
+
+        sampled_x, sampled_w, beta_final_x = _logistic_nat_grad_sequence_B(
+            subkeys_cov, w_jnp, W_aug_jnp, x_orig_jnp, beta_init_x, float(n), T_fwd
+        )
+        prop_scores = np.array(jax.nn.sigmoid(W_aug_jnp @ beta_final_x.T).T)
+
+    # zero-atom model: recursively updated along the SAME (x, w) sequence via natural gradient
+    Z_new_aug = jnp.concatenate(
+        (jnp.ones((B_post, T_fwd, 1)), sampled_x[:, :, None], sampled_w), axis=-1
+    )
+    key, *subkeys_zero = split(key, B_post + 1)
+    subkeys_zero = jnp.array(subkeys_zero)
+    is_zero_new, beta_zero_final = _logistic_nat_grad_step_presampled_B(
+        subkeys_zero, Z_new_aug, Z_aug_jnp, is_zero_orig_jnp, beta_zero_init, float(n), T_fwd
+    )  # (B_post, T_fwd)
+
+    z_samp = jnp.concatenate((sampled_x[:, :, None], sampled_w), axis=-1)  # (B_post, T_fwd, 1+p)
+
+    key, *subkeys_fwd = split(key, B_post + 1)
+    subkeys_fwd = jnp.array(subkeys_fwd)
+
+    if diagnostic:
+        w_emp_counts = np.bincount(w_pop_inv, minlength=n_w).astype(float)
+        w_emp_weights = jnp.array(w_emp_counts / w_emp_counts.sum())
+        flat_idx = np.arange(n_x * n_w * n_y).reshape(n_x, n_w, n_y)
+        marginal_idx = jnp.array(flat_idx.transpose(0, 2, 1))
+        pdf_init_flat = jnp.exp(logpdf_init_pos[:, -1])
+        p_n_marginal_pos = jnp.sum(pdf_init_flat[marginal_idx] * w_emp_weights[None, None, :], axis=-1)
+
+        w_idx, w_msk = _zi_w_idx_mask(x_update, weighting, w_unique_jnp, w_map=w_map,
+                                      ind_new_pr=ind_new_pr, Z_jnp=Z_jnp,
+                                      sampled_x=sampled_x, sampled_w=sampled_w)
+
+        def _single(subkey, z_samp_b, is_zero_b, w_idx_b, w_msk_b):
+            return _zi_forward_step_loop(
+                subkey, z_samp_b, is_zero_b, fit_pos.rho_opt, fit_pos.rho_x_opt, z_target,
+                n_pos, T_fwd, logcdf_init_pos, logpdf_init_pos,
+                w_idx_b, w_msk_b, w_emp_counts, n_w, p_n_marginal_pos, marginal_idx,
+                diagnostic=True,
+            )
+        logpdf_pr, final_counts_all, l1_trajectory = vmap(_single)(
+            subkeys_fwd, z_samp, is_zero_new, w_idx, w_msk
+        )
+        final_weights = final_counts_all / final_counts_all.sum(axis=1, keepdims=True)
+    else:
+        def _single(subkey, z_samp_b, is_zero_b):
+            return _zi_forward_step_loop(
+                subkey, z_samp_b, is_zero_b, fit_pos.rho_opt, fit_pos.rho_x_opt, z_target,
+                n_pos, T_fwd, logcdf_init_pos, logpdf_init_pos, diagnostic=False,
+            )
+        logpdf_pr, _, _ = vmap(_single)(subkeys_fwd, z_samp, is_zero_new)
+
+        mask = (sampled_x == 1) if weighting == "att" else None
+        final_weights = _covariate_weights(sampled_w, w_unique_jnp, mask)
+
+    pdfs_pos = jnp.exp(jnp.squeeze(logpdf_pr)).reshape(B_post, n_x, n_w, n_y)
+    marginal_pdfs_pos = jnp.einsum('bw,bxwy->bxy', final_weights, pdfs_pos)
+    results = _summarize(marginal_pdfs_pos)
+    # raw per-draw continuous density (integrates to 1 over y, i.e. NOT yet scaled by (1 - p0)),
+    # kept alongside the summarized version so callers can combine it with the raw per-draw
+    # p0_marginal below (e.g. to compute a posterior of E[Y(x)] or the ATT) without having to
+    # redo the marginalisation over w.
+    results['marginal_pdfs_pos'] = np.array(marginal_pdfs_pos)
+
+    # zero-atom posterior P(Y=y0 | X=x_val), marginalised over w with the same weights used
+    # for the continuous part
+    x_rep = jnp.repeat(jnp.array(x_vals, dtype=w_unique_jnp.dtype), n_w)
+    w_rep = jnp.tile(w_unique_jnp, (n_x, 1))
+    z_xw_aug = jnp.concatenate((jnp.ones((n_x * n_w, 1)), x_rep[:, None], w_rep), axis=1)
+    p0_grid = jax.nn.sigmoid(z_xw_aug @ beta_zero_final.T).T.reshape(B_post, n_x, n_w)
+    p0_marginal = jnp.einsum('bw,bxw->bx', final_weights, p0_grid)
+    p0_results = {}
+    for i in range(n_x):
+        p0_i = p0_marginal[:, i]
+        p0_results[f'x_{i}'] = {
+            'mean': float(jnp.mean(p0_i)),
+            'low':  float(jnp.quantile(p0_i, 0.025)),
+            'high': float(jnp.quantile(p0_i, 0.975)),
+        }
+    results['p0'] = p0_results
+    results['p0_marginal'] = np.array(p0_marginal)  # (B_post, n_x), raw per-draw P(Y=y0|X=x_val)
+
+    if diagnostic:
+        l1_trajectory = jnp.concatenate([jnp.zeros((B_post, 1, n_x)), l1_trajectory], axis=1)
+        results['l1_trajectory'] = np.array(l1_trajectory)
+
+    if weighting == "att" and x_update == "bb":
+        prop_scores = fit_propensity_scores(Z, np.asarray(ind_new_pr))
+    if prop_scores is not None:
+        results['propensity_scores'] = np.asarray(prop_scores)
+
+    return results
+
+
+def _validate_zi_args(x, x_vals, x_update, weighting, caller):
+    if x_update not in ("bb", "logistic"):
+        raise ValueError("x_update must be 'bb' or 'logistic'")
+    if weighting not in ("ate", "att"):
+        raise ValueError("weighting must be 'ate' or 'att'")
+    x_levels = set(np.unique(x).tolist())
+    if not x_levels.issubset({0, 1}):
+        raise ValueError(f"{caller} requires binary x in {{0, 1}}; got levels {sorted(x_levels)}")
+    if set(np.asarray(x_vals).tolist()) != {0, 1}:
+        raise ValueError(f"{caller} requires x_vals=(0, 1)")
+    if np.sum(x == 1) == 0 or np.sum(x == 0) == 0:
+        raise ValueError("both treated (x==1) and control (x==0) observations are required")
+
+
+# Zero-inflated counterpart of mp_causal_density (S-learner only): models Y as a point mass
+# at y0 plus a continuous copula-regression part for Y != y0, so that a large point mass
+# (e.g. Y=0 for unemployed participants in the Lalonde data) does not corrupt the continuous
+# copula's bandwidth fit or forward-resampling stationarity.
+#
+# Returns the same "x_i" continuous-density entries as mp_causal_density (marginalised over
+# the non-atom part only, i.e. these integrate to 1 over y, NOT (1 - p0)), plus a "p0" entry
+# with the posterior of P(Y=y0 | X=x_val) for each x_val. Combining the atom and the
+# continuous part into a single mixture density for plotting is left to the caller. Also
+# returns raw (non-summarized, per posterior draw) "marginal_pdfs_pos" (B_post, n_x, n_y) and
+# "p0_marginal" (B_post, n_x) arrays, so the caller can combine them into a posterior of the
+# mixture mean E[Y(x)] = (1 - p0) * E[Y(x) | Y(x) != y0] + p0 * y0 (e.g. for an ATT posterior)
+# without redoing the marginalisation over w.
+def mp_causal_density_zi(y, x, w, y_grid, B_post, T_fwd, *,
+                         x_vals=(0, 1), x_update="bb", weighting="ate", y0=0.0, seed=42):
+    w = np.asarray(w)
+    if w.ndim == 1:
+        w = w.reshape(-1, 1)
+    x = np.asarray(x)
+    x_vals = np.asarray(x_vals) if not np.isscalar(x_vals) else np.array([x_vals])
+    _validate_zi_args(x, x_vals, x_update, weighting, "mp_causal_density_zi")
+
+    return _mp_density_zi_s_learner_impl(y, x, w, x_vals, y_grid, B_post, T_fwd,
+                                        x_update, weighting, y0, seed, diagnostic=False)
+
+
+# Diagnostic twin of mp_causal_density_zi: additionally tracks an L1 convergence trajectory
+# of the CONTINUOUS marginal density against its initial (t=0) fit, at every forward step.
+# The atom probability P(Y=y0|x) is deliberately NOT included in this L1 metric -- the goal
+# is to check whether excluding zeros from the continuous copula recursion resolves the
+# divergence seen previously, before tackling a combined point-mass + continuous L1 metric.
+def mp_causal_density_zi_diagnostic(y, x, w, y_grid, B_post, T_fwd, *,
+                                    x_vals=(0, 1), x_update="bb", weighting="ate", y0=0.0, seed=42):
+    w = np.asarray(w)
+    if w.ndim == 1:
+        w = w.reshape(-1, 1)
+    x = np.asarray(x)
+    x_vals = np.asarray(x_vals) if not np.isscalar(x_vals) else np.array([x_vals])
+    _validate_zi_args(x, x_vals, x_update, weighting, "mp_causal_density_zi_diagnostic")
+
+    return _mp_density_zi_s_learner_impl(y, x, w, x_vals, y_grid, B_post, T_fwd,
+                                        x_update, weighting, y0, seed, diagnostic=True)
 ### ###
