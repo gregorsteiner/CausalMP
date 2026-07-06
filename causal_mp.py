@@ -551,10 +551,10 @@ def _mp_density_s_learner_diagnostic(y, x, w, x_vals, y_grid, B_post, T_fwd,
 
             logcdf_f, logpdf_f, l1_dists, final_counts = fori_loop(
                 0, T_fwd, step, (logcdf_init, logpdf_init, l1_init, counts_init))
-            return logpdf_f, l1_dists, final_counts, ind_new
+            return logcdf_f, logpdf_f, l1_dists, final_counts, ind_new
 
         print('Diagnostic resampling...')
-        logpdf_pr, l1_trajectory, final_counts_all, ind_new_pr = vmap(_single_diag)(subkeys_arr)
+        logcdf_pr, logpdf_pr, l1_trajectory, final_counts_all, ind_new_pr = vmap(_single_diag)(subkeys_arr)
 
         sampled_x = Z_jnp[ind_new_pr, 0]
         sampled_w = Z_jnp[ind_new_pr, 1:]
@@ -620,10 +620,10 @@ def _mp_density_s_learner_diagnostic(y, x, w, x_vals, y_grid, B_post, T_fwd,
 
             logcdf_f, logpdf_f, l1_dists, final_counts = fori_loop(
                 0, T_fwd, step, (logcdf_init, logpdf_init, l1_init, counts_init))
-            return logpdf_f, l1_dists, final_counts
+            return logcdf_f, logpdf_f, l1_dists, final_counts
 
         print('Diagnostic resampling...')
-        logpdf_pr, l1_trajectory, final_counts_all = vmap(
+        logcdf_pr, logpdf_pr, l1_trajectory, final_counts_all = vmap(
             _single_diag_logistic)(subkeys2_arr, Z_samp_all, w_idx_all, w_msk_all)
 
         sampled_x = x_new_all
@@ -631,12 +631,17 @@ def _mp_density_s_learner_diagnostic(y, x, w, x_vals, y_grid, B_post, T_fwd,
         prop_scores = np.array(jax.nn.sigmoid(W_aug_jnp @ beta_final_all.T).T)
 
     logpdf_pr = jnp.squeeze(logpdf_pr)
+    logcdf_pr = jnp.squeeze(logcdf_pr)
     pdfs = jnp.exp(logpdf_pr).reshape(B_post, n_x, n_w, n_y)
+    cdfs = jnp.exp(logcdf_pr).reshape(B_post, n_x, n_w, n_y)
 
     final_weights = final_counts_all / final_counts_all.sum(axis=1, keepdims=True)
     marginal_pdfs = jnp.einsum('bw,bxwy->bxy', final_weights, pdfs)
+    marginal_cdfs = jnp.einsum('bw,bxwy->bxy', final_weights, cdfs)
 
     results = _summarize(marginal_pdfs)
+    results['marginal_pdfs'] = np.array(marginal_pdfs)
+    results['marginal_cdfs'] = np.array(marginal_cdfs)
     l1_trajectory = jnp.concatenate([jnp.zeros((B_post, 1, n_x)), l1_trajectory], axis=1)
     results['l1_trajectory'] = np.array(l1_trajectory)
 
@@ -682,6 +687,7 @@ def _mp_density_t_learner_diagnostic(y, x, w, x_vals, y_grid, B_post, T_fwd,
     shared_w_idx = vmap(_draw_shared_bb)(subkeys_shared)  # (B_post, T_fwd)
 
     marginals = []
+    marginal_cdfs_arms = []
     l1_all_arms = []
 
     for arm_i, x_val in enumerate(x_vals):
@@ -745,18 +751,23 @@ def _mp_density_t_learner_diagnostic(y, x, w, x_vals, y_grid, B_post, T_fwd,
 
             logcdf_f, logpdf_f, l1_dists, final_counts = fori_loop(
                 0, T_fwd, step, (logcdf_init, logpdf_init, l1_init, counts_init))
-            return logpdf_f, l1_dists, final_counts
+            return logcdf_f, logpdf_f, l1_dists, final_counts
 
         print(f'Diagnostic resampling for x={x_val}...')
-        logpdf_pr, l1_arm, final_counts = vmap(_single_diag_arm)(subkeys_arm, shared_w_idx)
+        logcdf_pr, logpdf_pr, l1_arm, final_counts = vmap(_single_diag_arm)(subkeys_arm, shared_w_idx)
 
         pdfs = jnp.exp(jnp.squeeze(logpdf_pr)).reshape(B_post, n_w, n_y)
+        cdfs = jnp.exp(jnp.squeeze(logcdf_pr)).reshape(B_post, n_w, n_y)
         final_weights = final_counts / final_counts.sum(axis=1, keepdims=True)
         marginals.append(jnp.einsum('bw,bwy->by', final_weights, pdfs))
+        marginal_cdfs_arms.append(jnp.einsum('bw,bwy->by', final_weights, cdfs))
         l1_all_arms.append(l1_arm)
 
     marginal_pdfs = jnp.stack(marginals, axis=1)
+    marginal_cdfs = jnp.stack(marginal_cdfs_arms, axis=1)
     results = _summarize(marginal_pdfs)
+    results['marginal_pdfs'] = np.array(marginal_pdfs)
+    results['marginal_cdfs'] = np.array(marginal_cdfs)
 
     l1_trajectory = jnp.concatenate(l1_all_arms, axis=-1)  # (B, T, n_x)
     l1_trajectory = jnp.concatenate([jnp.zeros((B_post, 1, n_x)), l1_trajectory], axis=1)
