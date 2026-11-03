@@ -6,6 +6,9 @@ for the mp_density_iv application. The key difference from standard predictive r
 is that we resample (x, z) pairs together using Bayesian bootstrap, then update the
 least squares estimate and compute new eta values before using them in the copula update.
 
+It also provides mp_compliers for a binary experiment with non-compliance, which resamples
+the latent compliance type directly (Section 4.1 of the paper).
+
 Author: Modified from main_copula_regression_conditional.py
 """
 
@@ -44,56 +47,99 @@ def bayesian_bootstrap(n, T_fwd, rng):
 
 
 ### Instrumental variable approach to binary outcome estimation for compliers ###
-# Uses Bayesian bootstrap directly on (y, x, z) triplets to estimate probabilities
+# Predictive resampling on the latent compliance type C in {AT, NT, CP}: every imputed
+# observation is generated from a model satisfying random assignment, exclusion and
+# monotonicity, so P_i(Y(x)=1 | CP) = P_i(Y=1 | X=x, C=CP) is a valid probability for all i.
+AT, NT, CP = 0, 1, 2
+# outcome cells (X, C): 0 = (0, NT), 1 = (1, AT), 2 = (0, CP), 3 = (1, CP)
+CELL_X0_NT, CELL_X1_AT, CELL_X0_CP, CELL_X1_CP = 0, 1, 2, 3
+
+
+def _bernoulli_lik(y, q):
+    return q if y == 1 else 1.0 - q
+
+
+def _complier_posterior(y, p_cp, q_cp, p_other, q_other):
+    # P(C = CP | X, Z, Y = y) for an ambiguous cell mixing compliers with one other type
+    num = p_cp * _bernoulli_lik(y, q_cp)
+    den = num + p_other * _bernoulli_lik(y, q_other)
+    return num / den if den > 0 else p_cp / (p_cp + p_other)
+
+
 def mp_compliers(y, x, z, B_post, T_fwd, n_checkpoints=50, seed=42):
     """
-    Estimate P(Y(0)=1|C) and P(Y(1)=1|C) for compliers using Bayesian bootstrap.
-    Uses recursive mean updates so each new observation is O(1).
+    Estimate P(Y(0)=1|CP) and P(Y(1)=1|CP) for compliers with binary (y, x, z).
+
+    Initial predictive: the types of observed units with (X=0, Z=0) (CP or NT) and
+    (X=1, Z=1) (CP or AT) are imputed independently in each sequence, conditional on the
+    observed outcome via Bayes rule with the identified plug-in outcome probabilities.
+    Forward step: draw Z from a Polya urn (Bayesian bootstrap), draw C independently from
+    a Polya urn on the types initialised at n * p_hat_c, set X = X_C(Z), draw Y from a
+    Polya urn within the (X, C) cell, and update all urns.
     Vectorised across B_post: only loops over T_fwd.
 
     Returns dict with keys 'Control', 'Treatment', 'Complier' (each shape
-    (B_post, n_checkpoints)) and 'checkpoints' (the forward step indices).
+    (B_post, n_checkpoints)), 'checkpoints' (the forward step indices) and 'init'
+    (plug-in type probabilities and imputation probabilities).
     """
-    y_arr = np.asarray(y)
-    x_arr = np.asarray(x)
-    z_arr = np.asarray(z)
+    y_arr = np.asarray(y).astype(int)
+    x_arr = np.asarray(x).astype(int)
+    z_arr = np.asarray(z).astype(int)
     n = len(y_arr)
 
-    rng = np.random.RandomState(seed)
+    rng = np.random.default_rng(seed)
 
-    # Draw all B_post bootstrap samples at once: (B_post, n + T_fwd)
-    weights = rng.dirichlet(np.ones(n), size=B_post)  # (B_post, n)
-    base = np.tile(np.arange(n), (B_post, 1))  # (B_post, n)
-    extra = np.array([rng.choice(n, size=T_fwd, p=w) for w in weights])  # (B_post, T_fwd)
-    all_indices = np.concatenate([base, extra], axis=1)  # (B_post, n + T_fwd)
+    # counts n_xzy of observed units in each (x, z, y) cell
+    cnt = np.zeros((2, 2, 2))
+    np.add.at(cnt, (x_arr, z_arr, y_arr), 1)
+    n_z = cnt.sum(axis=(0, 2))  # (n_z0, n_z1)
 
-    y_full = y_arr[all_indices]  # (B_post, n + T_fwd)
-    x_full = x_arr[all_indices]
-    z_full = z_arr[all_indices]
+    def rate(xv, zv):
+        tot = cnt[xv, zv].sum()
+        return cnt[xv, zv, 1] / tot if tot > 0 else 0.5
 
-    # Initialise accumulators from the first n observations (vectorised)
-    yb, xb, zb = y_full[:, :n], x_full[:, :n], z_full[:, :n]
-    is_z0_init = (zb == 0)
-    is_z1_init = (zb == 1)
+    # ========== PLUG-IN TYPE AND OUTCOME PROBABILITIES ==========
+    p_hat = np.zeros(3)
+    p_hat[AT] = cnt[1, 0].sum() / n_z[0]
+    p_hat[NT] = cnt[0, 1].sum() / n_z[1]
+    p_hat[CP] = 1.0 - p_hat[AT] - p_hat[NT]
+    if p_hat[CP] <= 0:
+        raise ValueError(f"Estimated complier share is not positive ({p_hat[CP]:.4f}).")
 
-    cnt_z0 = is_z0_init.sum(axis=1).astype(float)  # (B_post,)
-    cnt_z1 = is_z1_init.sum(axis=1).astype(float)
-    sum_x_z0 = (xb * is_z0_init).sum(axis=1).astype(float)
-    sum_x_z1 = (xb * is_z1_init).sum(axis=1).astype(float)
+    q_nt, q_at = rate(0, 1), rate(1, 0)
+    q_cp0 = np.clip(((p_hat[NT] + p_hat[CP]) * rate(0, 0) - p_hat[NT] * q_nt) / p_hat[CP], 0, 1)
+    q_cp1 = np.clip(((p_hat[AT] + p_hat[CP]) * rate(1, 1) - p_hat[AT] * q_at) / p_hat[CP], 0, 1)
 
-    m_x0z0 = (xb == 0) & is_z0_init
-    m_x0z1 = (xb == 0) & is_z1_init
-    m_x1z0 = (xb == 1) & is_z0_init
-    m_x1z1 = (xb == 1) & is_z1_init
+    # imputation probabilities P(CP | X, Z, Y=y) for the ambiguous cells, indexed by y
+    pi_00 = np.array([_complier_posterior(yv, p_hat[CP], q_cp0, p_hat[NT], q_nt) for yv in (0, 1)])
+    pi_11 = np.array([_complier_posterior(yv, p_hat[CP], q_cp1, p_hat[AT], q_at) for yv in (0, 1)])
 
-    cnt_x0z0 = m_x0z0.sum(axis=1).astype(float)
-    cnt_x0z1 = m_x0z1.sum(axis=1).astype(float)
-    cnt_x1z0 = m_x1z0.sum(axis=1).astype(float)
-    cnt_x1z1 = m_x1z1.sum(axis=1).astype(float)
-    sum_y_x0z0 = (yb * m_x0z0).sum(axis=1).astype(float)
-    sum_y_x0z1 = (yb * m_x0z1).sum(axis=1).astype(float)
-    sum_y_x1z0 = (yb * m_x1z0).sum(axis=1).astype(float)
-    sum_y_x1z1 = (yb * m_x1z1).sum(axis=1).astype(float)
+    # ========== INITIAL PREDICTIVE (per sequence) ==========
+    # impute the number of compliers in each ambiguous (x, z, y) cell
+    cp_00 = rng.binomial(cnt[0, 0].astype(int), pi_00, size=(B_post, 2)).astype(float)  # (B_post, y)
+    cp_11 = rng.binomial(cnt[1, 1].astype(int), pi_11, size=(B_post, 2)).astype(float)
+
+    # Polya urns on Y within each (X, C) cell: m = total count, s = count with Y = 1
+    m = np.zeros((B_post, 4))
+    s = np.zeros((B_post, 4))
+    m[:, CELL_X0_CP] = cp_00.sum(axis=1)
+    s[:, CELL_X0_CP] = cp_00[:, 1]
+    m[:, CELL_X0_NT] = cnt[0, 1].sum() + cnt[0, 0].sum() - m[:, CELL_X0_CP]
+    s[:, CELL_X0_NT] = cnt[0, 1, 1] + cnt[0, 0, 1] - s[:, CELL_X0_CP]
+    m[:, CELL_X1_CP] = cp_11.sum(axis=1)
+    s[:, CELL_X1_CP] = cp_11[:, 1]
+    m[:, CELL_X1_AT] = cnt[1, 0].sum() + cnt[1, 1].sum() - m[:, CELL_X1_CP]
+    s[:, CELL_X1_AT] = cnt[1, 0, 1] + cnt[1, 1, 1] - s[:, CELL_X1_CP]
+
+    # an empty cell starts from a single pseudo-observation at its plug-in rate
+    q_plugin = np.array([q_nt, q_at, q_cp0, q_cp1])
+    empty = m == 0
+    m[empty] = 1.0
+    s[empty] = np.broadcast_to(q_plugin, m.shape)[empty]
+
+    # Polya urns on Z (observed counts) and on the types (fractional counts n * p_hat)
+    z_counts = np.tile(n_z, (B_post, 1))
+    type_counts = np.tile(n * p_hat, (B_post, 1))
 
     checkpoints = np.unique(np.linspace(0, T_fwd - 1, n_checkpoints).astype(int))
     checkpoint_set = set(checkpoints)
@@ -103,58 +149,35 @@ def mp_compliers(y, x, z, B_post, T_fwd, n_checkpoints=50, seed=42):
     trt_traj = np.zeros((B_post, n_cp))
     comp_traj = np.zeros((B_post, n_cp))
 
-    # Forward-sample T_fwd observations, updating all B_post sequences per step
+    # ========== FORWARD SAMPLING ==========
+    rows = np.arange(B_post)
     cp_idx = 0
     for j in range(T_fwd):
-        yi = y_full[:, n + j]  # (B_post,)
-        xi = x_full[:, n + j]
-        zi = z_full[:, n + j]
+        tot = n + j
+        u = rng.random((B_post, 3))
 
-        is_z0 = (zi == 0)
-        is_z1 = ~is_z0
-        is_x0 = (xi == 0)
-        is_x1 = ~is_x0
+        # (1) instrument, (2) type independently of the instrument, (3) X = X_C(Z)
+        zi = (u[:, 0] < z_counts[:, 1] / tot).astype(int)
+        p_at = type_counts[:, AT] / tot
+        p_nt = type_counts[:, NT] / tot
+        ci = np.where(u[:, 1] < p_at, AT, np.where(u[:, 1] < p_at + p_nt, NT, CP))
+        cell = np.where(ci == AT, CELL_X1_AT,
+                        np.where(ci == NT, CELL_X0_NT,
+                                 np.where(zi == 1, CELL_X1_CP, CELL_X0_CP)))
 
-        cnt_z0 += is_z0
-        cnt_z1 += is_z1
-        sum_x_z0 += xi * is_z0
-        sum_x_z1 += xi * is_z1
-
-        cnt_x0z0 += is_x0 & is_z0
-        cnt_x0z1 += is_x0 & is_z1
-        cnt_x1z0 += is_x1 & is_z0
-        cnt_x1z1 += is_x1 & is_z1
-        sum_y_x0z0 += yi * (is_x0 & is_z0)
-        sum_y_x0z1 += yi * (is_x0 & is_z1)
-        sum_y_x1z0 += yi * (is_x1 & is_z0)
-        sum_y_x1z1 += yi * (is_x1 & is_z1)
+        # (4) outcome from the (X, C) cell, (5) update all urns
+        yi = u[:, 2] < s[rows, cell] / m[rows, cell]
+        z_counts[rows, zi] += 1
+        type_counts[rows, ci] += 1
+        m[rows, cell] += 1
+        s[rows, cell] += yi
 
         if j not in checkpoint_set:
             continue
 
-        # avoid division by zero counts
-        safe_z0 = np.maximum(cnt_z0, 1)
-        safe_z1 = np.maximum(cnt_z1, 1)
-        safe_x0z0 = np.maximum(cnt_x0z0, 1)
-        safe_x0z1 = np.maximum(cnt_x0z1, 1)
-        safe_x1z0 = np.maximum(cnt_x1z0, 1)
-        safe_x1z1 = np.maximum(cnt_x1z1, 1)
-
-        p_A = np.where(cnt_z0 > 0, sum_x_z0 / safe_z0, 0.0)
-        p_N = np.where(cnt_z1 > 0, 1.0 - sum_x_z1 / safe_z1, 0.0)
-        p_C = np.clip(1 - p_A - p_N, 1e-10, 1.0)
-
-        p_y1_x0_z0 = np.where(cnt_x0z0 > 0, sum_y_x0z0 / safe_x0z0, 0.0)
-        p_y1_x0_z1 = np.where(cnt_x0z1 > 0, sum_y_x0z1 / safe_x0z1, 0.0)
-        p_y1_x1_z0 = np.where(cnt_x1z0 > 0, sum_y_x1z0 / safe_x1z0, 0.0)
-        p_y1_x1_z1 = np.where(cnt_x1z1 > 0, sum_y_x1z1 / safe_x1z1, 0.0)
-
-        prob_y0 = ((p_N + p_C) / p_C) * p_y1_x0_z0 - p_N / p_C * p_y1_x0_z1
-        prob_y1 = ((p_A + p_C) / p_C) * p_y1_x1_z1 - p_A / p_C * p_y1_x1_z0
-
-        ctrl_traj[:, cp_idx] = np.clip(prob_y0, 0, 1)
-        trt_traj[:, cp_idx] = np.clip(prob_y1, 0, 1)
-        comp_traj[:, cp_idx] = np.clip(p_C, 0, 1)
+        ctrl_traj[:, cp_idx] = s[:, CELL_X0_CP] / m[:, CELL_X0_CP]
+        trt_traj[:, cp_idx] = s[:, CELL_X1_CP] / m[:, CELL_X1_CP]
+        comp_traj[:, cp_idx] = type_counts[:, CP] / (tot + 1)
         cp_idx += 1
 
     return {
@@ -162,6 +185,11 @@ def mp_compliers(y, x, z, B_post, T_fwd, n_checkpoints=50, seed=42):
         'Treatment': trt_traj,
         'Complier': comp_traj,
         'checkpoints': checkpoints,
+        'init': {
+            'p_hat': dict(zip(('AT', 'NT', 'CP'), p_hat)),
+            'pi_x0z0': pi_00,  # P(CP | X=0, Z=0, Y=y) for y = 0, 1
+            'pi_x1z1': pi_11,  # P(CP | X=1, Z=1, Y=y) for y = 0, 1
+        },
     }
 
 
