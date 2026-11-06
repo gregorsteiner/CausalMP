@@ -23,7 +23,11 @@ docs/site/
 # environment.
 Manifest.toml
 
-# ignore jupyter notebook checkpoints
-.ipynb_checkpoints
 *.pyc
 .claude/settings.local.json
+
+# Python bytecode caches
+__pycache__/
+
+# Jupyter checkpoints
+.ipynb_checkpoints
