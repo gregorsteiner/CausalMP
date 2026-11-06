@@ -11,7 +11,7 @@ The results were produced with Python 3.14. Install the dependencies with
 pip install -r requirements.txt
 ```
 
-The benchmark in `simulated_examples/illustration.py` and `simulated_examples/simulation_study.py` additionally requires R with the packages `ranger` and [npcausal](https://github.com/ehkennedy/npcausal) (`remotes::install_github("ehkennedy/npcausal")`). If `rpy2` cannot find R, set the `R_HOME` environment variable.
+The benchmark in `simulated_examples/illustration.py` and `simulated_examples/simulation_study.py` additionally requires R with the packages `ranger` and [npcausal](https://github.com/ehkennedy/npcausal) (`remotes::install_github("ehkennedy/npcausal")`). The SPQR-DS benchmark of Xu et al. (2022) in `simulated_examples/simulation_study.py` also needs `BayesTree` (`install.packages("BayesTree")`) and [SPQR](https://github.com/stevengxu/SPQR) (`remotes::install_github("stevengxu/SPQR")`; it is archived on CRAN and needs Rtools to compile on Windows). If `rpy2` cannot find R, set the `R_HOME` environment variable.
 
 ### Reproducing the results
 

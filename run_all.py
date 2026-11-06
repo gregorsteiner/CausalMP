@@ -2,7 +2,7 @@
 
 Usage (from the repository root):
     python run_all.py               # everything
-    python run_all.py --skip-r      # skip the scripts that need R + npcausal + rpy2 (illustration, simulation_study)
+    python run_all.py --skip-r      # skip the scripts that need R + npcausal/SPQR + rpy2 (illustration, simulation_study)
     python run_all.py --skip-slow   # skip simulated_examples.simulation_study (the long Monte Carlo study)
 """
 
@@ -25,7 +25,7 @@ MODULES = [
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--skip-r", action="store_true", help="skip the npcausal benchmark (simulated_examples.illustration, simulated_examples.simulation_study)")
+    parser.add_argument("--skip-r", action="store_true", help="skip the R benchmarks, npcausal and SPQR-DS (simulated_examples.illustration, simulated_examples.simulation_study)")
     parser.add_argument("--skip-slow", action="store_true", help="skip the Monte Carlo study (simulated_examples.simulation_study)")
     args = parser.parse_args()
 

@@ -9,16 +9,22 @@ draw a fresh dataset and fit
     with standardise=True gave mostly larger L1 errors and wider bands),
   - L2 Proj: npcausal::cdensity of Kennedy, Balakrishnan and Wasserman, with the basis
     dimension chosen per arm and per dataset by cv.cdensity,
+  - SPQR-DS: the double-balancing-score method of Xu et al. (2022) (BART-probit propensity
+    score from BayesTree + SPQR conditional density by NUTS + Bayesian bootstrap); see
+    simulated_examples/spqr_benchmark.py for the settings and the deviations from the paper,
 and record, for each counterfactual marginal density p(y(x)),
   (i)  the L1 distance int |p_hat - p| between the truth and the posterior mean (our methods)
        or the point estimate (L2 Proj), by the trapezoid rule on L1_GRID;
   (ii) whether the pointwise 95% interval for the density covers the true density value at
-       the true quantiles q_0.1, q_0.5, q_0.9 of Y(x), and the interval width there.
+       the true quantiles q_0.1, q_0.5, q_0.9 of Y(x), and the interval width there;
+  (iii) the wall-clock runtime of each fit (time_s).
 
 Produces Figures/Simulation_Study.pdf, Figures/Simulation_Study_summary.csv,
 Figures/Simulation_Study_table.tex and the per-replicate Figures/Simulation_Study_raw.csv.
-Requires R with npcausal and ranger, and rpy2. Slow: use --n-datasets for a quick test run,
-e.g. `python -m simulated_examples.simulation_study --n-datasets 2`.
+Requires R with npcausal, ranger, BayesTree and SPQR, and rpy2. Slow: use --n-datasets (and
+--spqr-iter/--spqr-warmup) for a quick test run, e.g.
+`python -m simulated_examples.simulation_study --n-datasets 2 --spqr-iter 300 --spqr-warmup 200`,
+or --skip-spqr to leave SPQR-DS out.
 """
 
 import argparse
@@ -59,6 +65,7 @@ from causal_mp import mp_causal_density
 from simulated_examples.dgp import (generate_data_sim1, true_y0_density_sim1, true_y1_density_sim1,
                                     true_quantiles_sim1)
 from simulated_examples.npcausal_benchmark import cdensity_select_k, cdensity_counterfactual
+from simulated_examples.spqr_benchmark import spqr_ds_counterfactual
 
 NS = (50, 200)
 SCENARIOS = (1, 2)
@@ -67,6 +74,9 @@ N_DATASETS = 100
 B_POST = 100
 T_FWD = 1000
 CDENSITY_KMAX = 8
+# SPQR-DS: fixed K (n_knots) and V1 (n_hidden) instead of the paper's WAIC selection, and
+# shorter chains than the paper (100 kept draws per PS draw, 5 PS draws)
+SPQR_SETTINGS = dict(n_knots=10, n_hidden=8, n_ps=5, iter=1500, warmup=500, thin=10)
 # L1 grid (plus the six true-quantile points, added per scenario). Cost is linear in the grid
 # size; spacing 0.3 keeps the trapezoid L1 within ~2% of a 451-point grid and holds
 # > 0.9999 of the true mass in every case.
@@ -78,8 +88,10 @@ MP_METHODS = {
     "T-Learner + BB": dict(learner="t"),
 }
 CDENSITY_NAME = "L2 Proj"
-METHODS = (*MP_METHODS, CDENSITY_NAME)
-COLORS = {"S-Learner + BB": "#1f77b4", "T-Learner + BB": "#2ca02c", CDENSITY_NAME: "#9467bd"}
+SPQR_NAME = "SPQR-DS"
+METHODS = (*MP_METHODS, CDENSITY_NAME, SPQR_NAME)
+COLORS = {"S-Learner + BB": "#1f77b4", "T-Learner + BB": "#2ca02c", CDENSITY_NAME: "#9467bd",
+          SPQR_NAME: "#d62728"}
 
 RAW_CSV = "Figures/Simulation_Study_raw.csv"
 SUMMARY_CSV = "Figures/Simulation_Study_summary.csv"
@@ -132,7 +144,8 @@ def dataset_seed(n, s):
     return 100_000 * n + s
 
 
-def run_experiment(ns, scenarios, n_datasets, t_fwd):
+def run_experiment(ns, scenarios, n_datasets, t_fwd, spqr=SPQR_SETTINGS):
+    """``spqr``: SPQR-DS settings (see SPQR_SETTINGS), or None to leave SPQR-DS out."""
     rows = []
     for n in ns:
         for sc in scenarios:
@@ -147,17 +160,33 @@ def run_experiment(ns, scenarios, n_datasets, t_fwd):
                 np.random.seed(dataset_seed(n, s))
                 y, x, w = generate_data_sim1(n, scenario=sc, J=2)
                 base = {"n": n, "scenario": sc, "replicate": s}
+                # time_s: wall-clock seconds of the whole fit (both arms; for L2 Proj including
+                # the cross-validation), repeated on the fit's Y(0) and Y(1) rows
                 for m, kw in MP_METHODS.items():
+                    t0 = time.perf_counter()
                     with contextlib.redirect_stdout(io.StringIO()):   # silence per-fit prints
                         res = mp_causal_density(y, x, w, tr["grid"], B_POST, t_fwd, seed=s, **kw)
-                    rows += [{**base, "method": m, **r} for r in evaluate(res, tr)]
+                    el = time.perf_counter() - t0
+                    rows += [{**base, "method": m, "time_s": el, **r} for r in evaluate(res, tr)]
                 try:
+                    t0 = time.perf_counter()
                     res, (k1, k0) = fit_cdensity(y, x, w, tr["grid"], seed=s)
-                    rows += [{**base, "method": CDENSITY_NAME, "k": kk, **r}
+                    el = time.perf_counter() - t0
+                    rows += [{**base, "method": CDENSITY_NAME, "time_s": el, "k": kk, **r}
                              for kk, r in zip((k0, k1), evaluate(res, tr))]
                 except Exception as e:   # record the failure rather than losing the whole run
                     print(f"  cdensity failed (n={n}, scenario={sc}, replicate={s}): {e}", flush=True)
                     rows += [{**base, "method": CDENSITY_NAME, "outcome": lab} for _, lab in OUTCOMES]
+                if spqr is not None:
+                    try:
+                        t0 = time.perf_counter()
+                        res = spqr_ds_counterfactual(y, x, w, tr["grid"], seed=s, **spqr)
+                        el = time.perf_counter() - t0
+                        rows += [{**base, "method": SPQR_NAME, "time_s": el, **r}
+                                 for r in evaluate(res, tr)]
+                    except Exception as e:
+                        print(f"  SPQR-DS failed (n={n}, scenario={sc}, replicate={s}): {e}", flush=True)
+                        rows += [{**base, "method": SPQR_NAME, "outcome": lab} for _, lab in OUTCOMES]
                 if (s + 1) % 10 == 0 or s + 1 == n_datasets:
                     print(f"n={n}, scenario {sc}: {s + 1}/{n_datasets} datasets "
                           f"({time.time() - start:.0f}s)", flush=True)
@@ -171,12 +200,16 @@ def run_experiment(ns, scenarios, n_datasets, t_fwd):
 def summarise(raw):
     keys = ["scenario", "n", "outcome", "method"]
     metric_cols = ["l1"] + [f"{p}_q{tau}" for p in ("cover", "width") for tau in QUANTILES]
+    if "time_s" in raw:   # older raw CSVs have no runtimes
+        metric_cols.append("time_s")
     g = raw.groupby(keys, sort=False)
     summary = g[metric_cols].mean()
     summary.insert(1, "l1_se", g["l1"].std() / np.sqrt(g["l1"].count()))
     summary.insert(0, "n_fits", g["l1"].count())
     summary = summary.reset_index()
-    summary["method"] = pd.Categorical(summary["method"], METHODS)
+    # only the methods present (e.g. a run with --skip-spqr, or an older raw CSV)
+    summary["method"] = pd.Categorical(summary["method"],
+                                       [m for m in METHODS if m in set(summary["method"])])
     summary = summary.sort_values(keys).reset_index(drop=True)
     summary.to_csv(SUMMARY_CSV, index=False)
     print(f"Saved {SUMMARY_CSV}")
@@ -189,6 +222,8 @@ def summarise(raw):
     tab["$L_1$ (SE)"] = [f"{a:.3f} ({b:.3f})" for a, b in zip(summary["l1"], summary["l1_se"])]
     for tau in QUANTILES:
         tab[f"Cov. $q_{{{tau}}}$"] = summary[f"cover_q{tau}"].map(lambda v: f"{v:.2f}")
+    if "time_s" in summary:
+        tab["Time (s)"] = summary["time_s"].map(lambda v: f"{v:.1f}")
     tab.to_latex(TABLE_TEX, index=False, escape=False)
     print(f"Saved {TABLE_TEX}")
     return summary
@@ -200,11 +235,12 @@ def plot(summary):
     scenarios = sorted(summary["scenario"].unique())
     fig, axes = plt.subplots(2, len(scenarios) * 2, figsize=(3 * len(scenarios) * 2, 5),
                              sharex=True, sharey="row", constrained_layout=True, squeeze=False)
-    offsets = dict(zip(METHODS, np.linspace(-0.15, 0.15, len(METHODS))))
+    methods = list(summary["method"].cat.categories)
+    offsets = dict(zip(methods, np.linspace(-0.15, 0.15, len(methods))))
     xpos = np.arange(len(ns))
 
     for j, (sc, (_, lab)) in enumerate([(sc, o) for sc in scenarios for o in OUTCOMES]):
-        for m in METHODS:
+        for m in methods:
             d = summary[(summary["scenario"] == sc) & (summary["outcome"] == lab)
                         & (summary["method"] == m)].set_index("n").reindex(ns)
             axes[0, j].errorbar(xpos + offsets[m], d["l1"], yerr=2 * d["l1_se"], fmt="o",
@@ -220,7 +256,7 @@ def plot(summary):
     axes[0, 0].set_ylabel(r"Mean $L_1$ error ($\pm$ 2 SE)")
     axes[1, 0].set_ylabel("Coverage at quantiles")
 
-    handles = [Line2D([0], [0], color=COLORS[m], marker="o", linestyle="none", label=m) for m in METHODS]
+    handles = [Line2D([0], [0], color=COLORS[m], marker="o", linestyle="none", label=m) for m in methods]
     handles += [Line2D([0], [0], color="grey", marker=mk, linestyle="none", label=rf"$q_{{{tau}}}$")
                 for tau, mk in zip(QUANTILES, ("v", "o", "^"))]
     fig.legend(handles=handles, loc="outside lower center", ncol=len(handles), frameon=False, fontsize=10)
@@ -235,12 +271,19 @@ def main():
     parser.add_argument("--n", type=int, nargs="+", default=list(NS), help="sample sizes")
     parser.add_argument("--scenario", type=int, nargs="+", default=list(SCENARIOS), choices=SCENARIOS)
     parser.add_argument("--t-fwd", type=int, default=T_FWD, help="forward-sampling horizon")
+    parser.add_argument("--spqr-iter", type=int, default=SPQR_SETTINGS["iter"],
+                        help="SPQR-DS NUTS iterations per PS draw, including warmup")
+    parser.add_argument("--spqr-warmup", type=int, default=SPQR_SETTINGS["warmup"],
+                        help="SPQR-DS NUTS warmup iterations per PS draw")
+    parser.add_argument("--skip-spqr", action="store_true", help="leave SPQR-DS out")
     parser.add_argument("--summarise-only", action="store_true",
                         help=f"skip the fits and rebuild the summary and figure from {RAW_CSV}")
     args = parser.parse_args()
 
+    spqr = None if args.skip_spqr else {**SPQR_SETTINGS, "iter": args.spqr_iter,
+                                         "warmup": args.spqr_warmup}
     raw = pd.read_csv(RAW_CSV) if args.summarise_only else \
-        run_experiment(args.n, args.scenario, args.n_datasets, args.t_fwd)
+        run_experiment(args.n, args.scenario, args.n_datasets, args.t_fwd, spqr)
     plot(summarise(raw))
 
 
