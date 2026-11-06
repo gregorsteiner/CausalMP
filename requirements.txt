@@ -1,0 +1,13 @@
+# Python dependencies. Versions are the ones the results were last produced with (Python 3.14).
+jax==0.10.0
+jaxlib==0.10.0
+numpy==2.4.4
+scipy==1.17.1
+pandas==3.0.3
+matplotlib==3.10.9
+statsmodels==0.14.6
+tqdm==4.67.3
+
+# Optional: only needed for the npcausal benchmark in sim_illustration.py
+# (also requires R with the npcausal and ranger packages, see README.md).
+rpy2==3.6.7
