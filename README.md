@@ -11,7 +11,7 @@ The results were produced with Python 3.14. Install the dependencies with
 pip install -r requirements.txt
 ```
 
-The benchmark in `simulated_examples/illustration.py` additionally requires R with the packages `ranger` and [npcausal](https://github.com/ehkennedy/npcausal) (`remotes::install_github("ehkennedy/npcausal")`). If `rpy2` cannot find R, set the `R_HOME` environment variable.
+The benchmark in `simulated_examples/illustration.py` and `simulated_examples/simulation_study.py` additionally requires R with the packages `ranger` and [npcausal](https://github.com/ehkennedy/npcausal) (`remotes::install_github("ehkennedy/npcausal")`). If `rpy2` cannot find R, set the `R_HOME` environment variable.
 
 ### Reproducing the results
 
@@ -21,7 +21,7 @@ From the repository root, run
 python run_all.py
 ```
 
-Add `--skip-r` to skip the R benchmark and `--skip-slow` to skip the (long) coverage experiment. Each example can also be run on its own from the repository root, e.g.
+Add `--skip-r` to skip the scripts that need R and `--skip-slow` to skip the (long) Monte Carlo study `simulated_examples/simulation_study.py` (L1 error and coverage over repeated datasets; use `--n-datasets` for a quick test run). Each example can also be run on its own from the repository root, e.g.
 
 ```bash
 python -m real_examples.zinc

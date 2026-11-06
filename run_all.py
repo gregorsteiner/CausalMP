@@ -2,8 +2,8 @@
 
 Usage (from the repository root):
     python run_all.py               # everything
-    python run_all.py --skip-r      # skip simulated_examples.illustration (needs R + npcausal + rpy2)
-    python run_all.py --skip-slow   # skip simulated_examples.coverage (the long coverage experiment)
+    python run_all.py --skip-r      # skip the scripts that need R + npcausal + rpy2 (illustration, simulation_study)
+    python run_all.py --skip-slow   # skip simulated_examples.simulation_study (the long Monte Carlo study)
 """
 
 import argparse
@@ -18,22 +18,22 @@ MODULES = [
     "real_examples.lalonde",
     "simulated_examples.motivating",
     "simulated_examples.illustration",
-    "simulated_examples.coverage",
+    "simulated_examples.simulation_study",
     "simulated_examples.iv",
 ]
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--skip-r", action="store_true", help="skip the npcausal benchmark (simulated_examples.illustration)")
-    parser.add_argument("--skip-slow", action="store_true", help="skip the coverage experiment (simulated_examples.coverage)")
+    parser.add_argument("--skip-r", action="store_true", help="skip the npcausal benchmark (simulated_examples.illustration, simulated_examples.simulation_study)")
+    parser.add_argument("--skip-slow", action="store_true", help="skip the Monte Carlo study (simulated_examples.simulation_study)")
     args = parser.parse_args()
 
     skip = set()
     if args.skip_r:
-        skip.add("simulated_examples.illustration")
+        skip.update({"simulated_examples.illustration", "simulated_examples.simulation_study"})
     if args.skip_slow:
-        skip.add("simulated_examples.coverage")
+        skip.add("simulated_examples.simulation_study")
 
     root = os.path.dirname(os.path.abspath(__file__))
     failed = []
