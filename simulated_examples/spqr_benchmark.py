@@ -14,7 +14,7 @@ The posterior draws are pooled over all PS draws.
 Deviations from the paper, to keep a repeated-data study feasible:
   - K (n_knots) and V1 (n_hidden) are fixed, not selected by WAIC over K in {8,10,12},
     V1 in {5,8,10};
-  - shorter chains by default (1500 iterations, 500 warmup, thin 10 -> 100 draws per PS draw;
+  - shorter chains by default (750 iterations, 250 warmup, thin 5 -> 100 draws per PS draw;
     the paper uses 3000 / 1000 / 10);
   - the outcome is mapped to [0, 1] by min-max scaling of a range padded by ``pad`` times the
     sample range on each side (the paper uses plain min-max), so the density is not forced to
@@ -82,8 +82,8 @@ _spqr_ds_r = ro.r(_SPQR_DS_R)
 ro.r('Sys.setenv(TORCH_INSTALL = "0")')
 
 
-def spqr_ds_draws(y, a, x, y_grid, n_knots=10, n_hidden=8, n_ps=5, iter=1500, warmup=500,
-                  thin=10, pad=0.1, hyper=0.01, seed=42):
+def spqr_ds_draws(y, a, x, y_grid, n_knots=10, n_hidden=8, n_ps=5, iter=750, warmup=250,
+                  thin=5, pad=0.1, hyper=0.01, seed=42):
     """Posterior draws of the SPQR-DS marginal counterfactual densities on ``y_grid``.
 
     ``a`` is the binary treatment, ``x`` the covariate matrix. Returns an array of shape

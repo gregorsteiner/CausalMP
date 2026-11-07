@@ -67,16 +67,17 @@ from simulated_examples.dgp import (generate_data_sim1, true_y0_density_sim1, tr
 from simulated_examples.npcausal_benchmark import cdensity_select_k, cdensity_counterfactual
 from simulated_examples.spqr_benchmark import spqr_ds_counterfactual
 
-NS = (50, 200)
+NS = (100,)
 SCENARIOS = (1, 2)
 QUANTILES = (0.1, 0.5, 0.9)
-N_DATASETS = 100
+N_DATASETS = 50
 B_POST = 100
 T_FWD = 1000
 CDENSITY_KMAX = 8
 # SPQR-DS: fixed K (n_knots) and V1 (n_hidden) instead of the paper's WAIC selection, and
-# shorter chains than the paper (100 kept draws per PS draw, 5 PS draws)
-SPQR_SETTINGS = dict(n_knots=10, n_hidden=8, n_ps=5, iter=1500, warmup=500, thin=10)
+# shorter chains than the paper (250 warmup, 500 post-warmup iterations thinned by 5 -> 100
+# kept draws per PS draw, 5 PS draws)
+SPQR_SETTINGS = dict(n_knots=10, n_hidden=8, n_ps=5, iter=750, warmup=250, thin=5)
 # L1 grid (plus the six true-quantile points, added per scenario). Cost is linear in the grid
 # size; spacing 0.3 keeps the trapezoid L1 within ~2% of a 451-point grid and holds
 # > 0.9999 of the true mass in every case.

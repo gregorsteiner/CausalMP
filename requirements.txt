@@ -9,5 +9,10 @@ statsmodels==0.14.6
 tqdm==4.67.3
 
 # Optional: only needed for the R benchmarks (npcausal, SPQR-DS) in simulated_examples/
-# (also requires R with npcausal, ranger, BayesTree and SPQR, see README.md).
+# (also requires R with npcausal 0.1.0, ranger 0.18.0, BayesTree 0.3-1.5 and SPQR 0.1.0, see
+# README.md). rpy2 >= 3.6 needs R >= 4.5; with an older R use rpy2==3.5.17.
 rpy2==3.6.7
+
+# Optional: lets simulated_examples/simulation_study.py pin itself to SIM_THREADS cores and
+# lower its priority (without it the study runs unrestricted).
+psutil==7.2.2
