@@ -18,11 +18,14 @@ from causal_mp import mp_causal_density_diagnostic
 def ite_draws(cdfs, y_grid, rho, z):
     """Individual treatment effect draws under a Gaussian copula with correlation rho.
 
+    rho: scalar, or (B,) array with one correlation per posterior sample (prior draws).
+
     cdfs: (B, 2, n_y) per-draw CDFs of Y(0), Y(1) on y_grid.
     z: (B, M, 2) independent standard normals (reused across rho for common random numbers).
     Returns (B, M) draws of Y(1) - Y(0), one set of M joint draws per posterior sample.
     """
     B = cdfs.shape[0]
+    rho = np.broadcast_to(np.asarray(rho, dtype=float), (B,))[:, None]
     u0 = norm.cdf(z[..., 0])
     u1 = norm.cdf(rho * z[..., 0] + np.sqrt(1 - rho**2) * z[..., 1])
     cdfs = np.maximum.accumulate(cdfs, axis=-1)
@@ -65,22 +68,25 @@ def main():
     res_t = mp_causal_density_diagnostic(y_std, x, w, y_grid_std, B, T, learner="t")
 
     # distribution of individual treatment effects under a Gaussian copula
-    rhos = [0.5, 0.75, 0.9]
+    # fixed correlations for a sensitivity analysis, plus a uniform prior rho ~ U(0, 1)
+    # with one independent draw per predictive sequence
     M = 2000
     z = np.random.default_rng(1).standard_normal((B, M, 2))
+    rho_prior = np.random.default_rng(2).uniform(0, 1, B)
+    rho_specs = [(r"$\rho=0.5$", 0.5), (r"$\rho=0.75$", 0.75), (r"$\rho \sim U(0, 1)$", rho_prior)]
     bins = np.arange(-15, 10.25, 0.5)
     bin_mid = 0.5 * (bins[:-1] + bins[1:])
 
-    ite_dens = {}  # (learner, rho) -> (B, n_bins) per-draw densities
+    ite_dens = {}  # (learner, rho label) -> (B, n_bins) per-draw densities
     for label, r in [("S-learner", res), ("T-learner", res_t)]:
-        for rho in rhos:
+        for rho_label, rho in rho_specs:
             ite = ite_draws(r['marginal_cdfs'], y_grid_orig, rho, z)
-            ite_dens[label, rho] = np.stack([np.histogram(e, bins=bins, density=True)[0] for e in ite])
+            ite_dens[label, rho_label] = np.stack([np.histogram(e, bins=bins, density=True)[0] for e in ite])
             for name, stat in [("mean ITE", ite.mean(axis=1)),
                                ("P(ITE < 0)", (ite < 0).mean(axis=1)),
                                ("SD ITE", ite.std(axis=1))]:
                 m, lo, hi = summarise(stat)
-                print(f"{label} rho={rho} {name}: mean={m:.2f}, 95% CI=[{lo:.2f}, {hi:.2f}]")
+                print(f"{label} {rho_label} {name}: mean={m:.2f}, 95% CI=[{lo:.2f}, {hi:.2f}]")
 
     # figure
     set_style()
@@ -101,9 +107,9 @@ def main():
     # bottom row: individual treatment effect distributions for each copula correlation
     rho_colors = ['tab:blue', 'tab:orange', 'tab:green']
     for ax, label in [(axes[1, 0], "S-learner"), (axes[1, 1], "T-learner")]:
-        for k, rho in enumerate(rhos):
-            dens = ite_dens[label, rho]
-            ax.plot(bin_mid, dens.mean(axis=0), color=rho_colors[k], label=fr"$\rho={rho}$")
+        for k, (rho_label, _) in enumerate(rho_specs):
+            dens = ite_dens[label, rho_label]
+            ax.plot(bin_mid, dens.mean(axis=0), color=rho_colors[k], label=rho_label)
             ax.fill_between(bin_mid, np.quantile(dens, 0.025, axis=0), np.quantile(dens, 0.975, axis=0),
                             color=rho_colors[k], alpha=0.15)
         ax.axvline(0, color='grey', linestyle='--', linewidth=0.8)
