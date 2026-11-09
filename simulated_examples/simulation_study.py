@@ -3,8 +3,8 @@
 Monte Carlo study on the DGP of simulated_examples/illustration.py (Xu et al., 2022): two
 scenarios that share Y(0) and differ in Y(1), at sample sizes n in NS. For each replicate we
 draw a fresh dataset and fit
-  - S-Learner + Bayesian bootstrap,
-  - T-Learner + Bayesian bootstrap
+  - MP-SL: S-Learner + Bayesian bootstrap,
+  - MP-TL: T-Learner + Bayesian bootstrap
     (both on unstandardised y: the outcomes are already near unit scale, and a pilot run
     with standardise=True gave mostly larger L1 errors and wider bands),
   - L2 Proj: npcausal::cdensity of Kennedy, Balakrishnan and Wasserman, with the basis
@@ -85,13 +85,15 @@ L1_GRID = np.linspace(-4.5, 4.5, 31)
 OUTCOMES = (("x_0", "Y(0)"), ("x_1", "Y(1)"))
 
 MP_METHODS = {
-    "S-Learner + BB": dict(),
-    "T-Learner + BB": dict(learner="t"),
+    "MP-SL (ours)": dict(),
+    "MP-TL (ours)": dict(learner="t"),
 }
+# method names in raw CSVs written before the renaming
+OLD_NAMES = {"S-Learner + BB": "MP-SL (ours)", "T-Learner + BB": "MP-TL (ours)"}
 CDENSITY_NAME = "L2 Proj"
 SPQR_NAME = "SPQR-DS"
 METHODS = (*MP_METHODS, CDENSITY_NAME, SPQR_NAME)
-COLORS = {"S-Learner + BB": "#1f77b4", "T-Learner + BB": "#2ca02c", CDENSITY_NAME: "#9467bd",
+COLORS = {"MP-SL (ours)": "#1f77b4", "MP-TL (ours)": "#2ca02c", CDENSITY_NAME: "#9467bd",
           SPQR_NAME: "#d62728"}
 
 RAW_CSV = "Figures/Simulation_Study_raw.csv"
@@ -199,6 +201,7 @@ def run_experiment(ns, scenarios, n_datasets, t_fwd, spqr=SPQR_SETTINGS):
 
 
 def summarise(raw):
+    raw = raw.assign(method=raw["method"].replace(OLD_NAMES))
     keys = ["scenario", "n", "outcome", "method"]
     metric_cols = ["l1"] + [f"{p}_q{tau}" for p in ("cover", "width") for tau in QUANTILES]
     if "time_s" in raw:   # older raw CSVs have no runtimes
@@ -218,16 +221,54 @@ def summarise(raw):
     with pd.option_context("display.width", 200, "display.max_columns", 30):
         print(summary.round(3).to_string(index=False))
 
-    # compact LaTeX table: L1 (SE) and coverage at the three quantiles
-    tab = summary[keys].copy()
-    tab["$L_1$ (SE)"] = [f"{a:.3f} ({b:.3f})" for a, b in zip(summary["l1"], summary["l1_se"])]
-    for tau in QUANTILES:
-        tab[f"Cov. $q_{{{tau}}}$"] = summary[f"cover_q{tau}"].map(lambda v: f"{v:.2f}")
-    if "time_s" in summary:
-        tab["Time (s)"] = summary["time_s"].map(lambda v: f"{v:.1f}")
-    tab.to_latex(TABLE_TEX, index=False, escape=False)
-    print(f"Saved {TABLE_TEX}")
+    write_table(summary)
     return summary
+
+
+def write_table(summary):
+    """LaTeX table: one block of rows per scenario (and n), one row per method, with a column
+    group per outcome holding L1 (SE) and the coverage at the three quantiles."""
+    blocks = sorted(summary[["scenario", "n"]].drop_duplicates().itertuples(index=False, name=None))
+    multi_n = summary["n"].nunique() > 1
+    methods = list(summary["method"].cat.categories)
+    has_time = "time_s" in summary
+    s = summary.set_index(["scenario", "n", "method", "outcome"]).sort_index()
+    w = 1 + len(QUANTILES)                       # columns per outcome group
+    ncol = 1 + w * len(OUTCOMES) + has_time
+
+    lines = [r"\begin{tabular}{l" + ("c" * w) * len(OUTCOMES) + ("r" if has_time else "") + "}",
+             r"\toprule"]
+    head = [""] + [rf"\multicolumn{{{w}}}{{c}}{{${lab}$}}" for _, lab in OUTCOMES] + [""] * has_time
+    rules = [rf"\cmidrule(lr){{{2 + w * i}-{1 + w * (i + 1)}}}" for i in range(len(OUTCOMES))]
+    lines += [" & ".join(head) + r" \\", " ".join(rules)]
+    sub = [""] + ["", rf"\multicolumn{{{len(QUANTILES)}}}{{c}}{{Coverage}}"] * len(OUTCOMES) + [""] * has_time
+    rules = [rf"\cmidrule(lr){{{3 + w * i}-{1 + w * (i + 1)}}}" for i in range(len(OUTCOMES))]
+    lines += [" & ".join(sub) + r" \\", " ".join(rules)]
+    cols = (["Method"] + ["$L_1$ (SE)", *(f"$q_{{{tau}}}$" for tau in QUANTILES)] * len(OUTCOMES)
+            + ["Time (s)"] * has_time)
+    lines += [" & ".join(cols) + r" \\"]
+
+    for sc, n in blocks:
+        title = f"Scenario {sc}" + (f", $n = {n}$" if multi_n else "")
+        lines += [r"\midrule", rf"\multicolumn{{{ncol}}}{{l}}{{\textit{{{title}}}}} \\"]
+        for m in methods:
+            cells = [m]
+            for _, lab in OUTCOMES:
+                key = (sc, n, m, lab)
+                if key not in s.index:
+                    cells += ["--"] * w
+                    continue
+                r = s.loc[key]
+                cells.append(f"{r['l1']:.3f} ({r['l1_se']:.3f})")
+                cells += [f"{r[f'cover_q{tau}']:.2f}" for tau in QUANTILES]
+            if has_time:
+                cells.append(f"{s.loc[(sc, n, m), 'time_s'].mean():.1f}"
+                             if (sc, n, m) in s.index else "--")
+            lines.append(" & ".join(cells) + r" \\")
+    lines += [r"\bottomrule", r"\end{tabular}"]
+    with open(TABLE_TEX, "w") as f:
+        f.write("\n".join(lines) + "\n")
+    print(f"Saved {TABLE_TEX}")
 
 
 def plot(summary):
