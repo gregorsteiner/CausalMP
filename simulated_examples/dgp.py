@@ -95,6 +95,19 @@ def true_y1_density_sim1(y_grid, scenario=2, M=200000):
     return true_y1_cond_density_sim1(y_grid, X, scenario).mean(axis=0)
 
 
+def true_quantiles_sim1(probs, outcome, scenario=2):
+    """True quantiles of Y(1) (outcome=1) or Y(0) (outcome=0), by inverting the numerical CDF
+    of the true marginal density on a fine grid."""
+    # 401 points keep the (M x grid) Monte Carlo average in memory; the CDF is smooth enough
+    # that linear interpolation on this grid is accurate to ~1e-3
+    grid = np.linspace(-6.0, 6.0, 401)
+    M = 50000
+    dens = true_y1_density_sim1(grid, scenario, M=M) if outcome == 1 else true_y0_density_sim1(grid, M=M)
+    cdf = np.concatenate([[0.0], np.cumsum(0.5 * (dens[1:] + dens[:-1]) * np.diff(grid))])
+    cdf /= cdf[-1]
+    return np.interp(np.asarray(probs, dtype=float), cdf, grid)
+
+
 # ── IV with continuous treatment ──────────────────────────────────────────────────────────
 # Z, eta ~ N(0, 1);  X = pi Z + eta;  Y = f(X) + eps
 # eps = c1 eta + c2 (eta^2 - 1) + nu  ->  nonlinear control function E[eps | eta]

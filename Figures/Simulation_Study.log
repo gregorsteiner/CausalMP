@@ -1,0 +1,35 @@
+n=100, scenario 1: 10/50 datasets (1857s)
+  cdensity failed (n=100, scenario=1, replicate=19): Error in integrate(function(t) { : non-finite function value
+
+n=100, scenario 1: 20/50 datasets (3683s)
+n=100, scenario 1: 30/50 datasets (5488s)
+n=100, scenario 1: 40/50 datasets (7238s)
+n=100, scenario 1: 50/50 datasets (8960s)
+n=100, scenario 2: 10/50 datasets (1738s)
+  cdensity failed (n=100, scenario=2, replicate=19): Error in integrate(function(t) { : non-finite function value
+
+n=100, scenario 2: 20/50 datasets (3477s)
+n=100, scenario 2: 30/50 datasets (5187s)
+n=100, scenario 2: 40/50 datasets (6906s)
+n=100, scenario 2: 50/50 datasets (8679s)
+Saved Figures/Simulation_Study_raw.csv
+Saved Figures/Simulation_Study_summary.csv
+ scenario   n outcome         method  n_fits    l1  l1_se  cover_q0.1  cover_q0.5  cover_q0.9  width_q0.1  width_q0.5  width_q0.9  time_s
+        1 100    Y(0) S-Learner + BB      50 0.147  0.010       0.860       0.940       0.840       0.143       0.108       0.123  31.814
+        1 100    Y(0) T-Learner + BB      50 0.200  0.013       0.880       0.900       0.760       0.201       0.141       0.121  40.492
+        1 100    Y(0)        L2 Proj      49 0.340  0.021       0.816       0.755       0.755       0.247       0.272       0.205   7.392
+        1 100    Y(0)        SPQR-DS      50 0.241  0.010       0.940       0.900       0.980       0.245       0.298       0.253  99.555
+        1 100    Y(1) S-Learner + BB      50 0.171  0.013       0.840       0.920       0.960       0.141       0.149       0.205  31.814
+        1 100    Y(1) T-Learner + BB      50 0.322  0.015       0.520       0.980       0.900       0.127       0.216       0.261  40.492
+        1 100    Y(1)        L2 Proj      49 0.325  0.023       0.755       0.714       0.796       0.180       0.257       0.246   7.392
+        1 100    Y(1)        SPQR-DS      50 0.244  0.010       0.920       0.940       0.980       0.252       0.292       0.248  99.555
+        2 100    Y(0) S-Learner + BB      50 0.297  0.012       0.860       0.540       0.600       0.234       0.152       0.115  30.412
+        2 100    Y(0) T-Learner + BB      50 0.200  0.013       0.880       0.900       0.760       0.201       0.141       0.121  36.120
+        2 100    Y(0)        L2 Proj      49 0.306  0.017       0.796       0.714       0.592       0.195       0.205       0.167   7.200
+        2 100    Y(0)        SPQR-DS      50 0.310  0.013       0.920       0.940       0.620       0.249       0.258       0.155  99.895
+        2 100    Y(1) S-Learner + BB      50 0.247  0.015       0.840       0.840       0.960       0.218       0.096       0.329  30.412
+        2 100    Y(1) T-Learner + BB      50 0.255  0.015       0.560       0.660       0.900       0.160       0.078       0.268  36.120
+        2 100    Y(1)        L2 Proj      49 0.338  0.019       0.612       0.592       0.878       0.177       0.146       0.221   7.200
+        2 100    Y(1)        SPQR-DS      50 0.315  0.012       0.740       0.960       0.880       0.191       0.226       0.224  99.895
+Saved Figures/Simulation_Study_table.tex
+Saved Figures/Simulation_Study.pdf

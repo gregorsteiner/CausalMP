@@ -209,6 +209,20 @@ def _bb_covariate_weights(inv, n_w, B_post, seed):
     return alpha @ onehot                                     # (B_post, n_w)
 
 
+def _standardise(y, y_grid, enabled):
+    """Location/scale standardisation applied before a copula fit.  Returns the standardised
+    (y, y_grid) and the scale ``sd``: densities computed on the standardised scale are mapped
+    back to the original scale by dividing by ``sd`` (CDFs are unchanged).  With
+    ``enabled=False`` (or a degenerate sample) this is the identity with sd = 1."""
+    y, y_grid = np.asarray(y, dtype=float), np.asarray(y_grid, dtype=float)
+    if not enabled:
+        return y, y_grid, 1.0
+    mu, sd = y.mean(), y.std()
+    if not np.isfinite(sd) or sd <= 0:
+        sd = 1.0
+    return (y - mu) / sd, (y_grid - mu) / sd, float(sd)
+
+
 def _build_target_grid(x_vals, w_unique_jnp, y_grid):
     """Cartesian grid over (x_vals, rows of w_unique, y_grid) as a z_target / y_target pair."""
     n_x, n_w, n_y = len(x_vals), len(w_unique_jnp), len(y_grid)
@@ -220,7 +234,9 @@ def _build_target_grid(x_vals, w_unique_jnp, y_grid):
 
 
 def _mp_density_s_learner(y, x, w, x_vals, y_grid, B_post, T_fwd,
-                          x_update, weighting, seed, w_cond=None):
+                          x_update, weighting, seed, w_cond=None, standardise=False):
+    # a single outcome model -> one pooled standardisation of y
+    y, y_grid, sd = _standardise(y, y_grid, standardise)
     Z = np.column_stack((x, w))
     n = Z.shape[0]
     y_jnp, Z_jnp = jnp.array(y), jnp.array(Z)
@@ -284,7 +300,7 @@ def _mp_density_s_learner(y, x, w, x_vals, y_grid, B_post, T_fwd,
         prop_scores = np.array(jax.nn.sigmoid(W_aug_jnp @ beta_final_all.T).T)
 
     logpdf_pr = jnp.squeeze(logpdf_pr)
-    pdfs = jnp.exp(logpdf_pr).reshape(B_post, n_x, n_w_tot, n_y)
+    pdfs = jnp.exp(logpdf_pr).reshape(B_post, n_x, n_w_tot, n_y) / sd   # back to the y scale
 
     mask = (sampled_x == 1) if weighting == "att" else None
     weights = _covariate_weights(sampled_w, w_unique_jnp, mask)
@@ -305,7 +321,8 @@ def _mp_density_s_learner(y, x, w, x_vals, y_grid, B_post, T_fwd,
     return results
 
 
-def _mp_density_t_learner(y, x, w, x_vals, y_grid, B_post, T_fwd, weighting, seed, w_cond=None):
+def _mp_density_t_learner(y, x, w, x_vals, y_grid, B_post, T_fwd, weighting, seed, w_cond=None,
+                          standardise=False):
     y = np.asarray(y)
     n_y = len(y_grid)
     n_cond = 0 if w_cond is None else len(w_cond)
@@ -335,19 +352,21 @@ def _mp_density_t_learner(y, x, w, x_vals, y_grid, B_post, T_fwd, weighting, see
     for x_val in x_vals:
         mask_arm = x == x_val
         Z_sub_jnp = jnp.array(w[mask_arm])
+        # each arm has its own outcome model -> standardise y within the arm
+        y_arm, y_grid_arm, sd = _standardise(y[mask_arm], y_grid, standardise)
 
         # fit a separate outcome model on this treatment arm
-        fit = fit_copula_cregression(jnp.array(y[mask_arm]), Z_sub_jnp,
+        fit = fit_copula_cregression(jnp.array(y_arm), Z_sub_jnp,
                                      single_x_bandwidth=False, n_perm_optim=10)
         _print_fit(fit, label=f"x={x_val}")
 
         n_w_grid = len(w_grid_jnp)
-        y_target = jnp.tile(jnp.array(y_grid), n_w_grid)
+        y_target = jnp.tile(jnp.array(y_grid_arm), n_w_grid)
         z_target = jnp.repeat(w_grid_jnp, n_y, axis=0)
         _, logpdf_pr, _ = predictive_resample_cregression(
             fit, Z_sub_jnp, y_target, z_target, B_post, T_fwd, seed=seed
         )
-        pdfs = jnp.exp(jnp.squeeze(logpdf_pr)).reshape(B_post, n_w_tot, n_y)
+        pdfs = jnp.exp(jnp.squeeze(logpdf_pr)).reshape(B_post, n_w_tot, n_y) / sd
 
         marginals.append(jnp.einsum('bw,bwy->by', cov_weights, pdfs[:, :n_w, :]))
         if n_cond:
@@ -392,9 +411,14 @@ def _mp_density_t_learner(y, x, w, x_vals, y_grid, B_post, T_fwd, weighting, see
 # slices are a pure outcome-model object: they are unaffected by ``x_update`` and
 # ``weighting`` (which only shape the marginalisation), and share the predictive-resampling
 # draws of the marginal run.  With ``w_cond=None`` the marginal output is unchanged.
+#
+# ``standardise=True`` (default False) fits each copula model to location/scale-standardised
+# y -- pooled for the S-learner, within each arm for the T-learner -- and maps all returned
+# densities back to the scale of ``y`` / ``y_grid``, so y and y_grid are then passed on their
+# original scale.  Useful when y is far from unit scale (e.g. the real-data examples).
 def mp_causal_density(y, x, w, y_grid, B_post, T_fwd, *,
                       x_vals=(0, 1), x_update="bb", weighting="ate", learner="s",
-                      w_cond=None, seed=42):
+                      w_cond=None, standardise=False, seed=42):
     if x_update not in ("bb", "logistic"):
         raise ValueError("x_update must be 'bb' or 'logistic'")
     if weighting not in ("ate", "att"):
@@ -442,9 +466,9 @@ def mp_causal_density(y, x, w, y_grid, B_post, T_fwd, *,
 
     if learner == "t":
         return _mp_density_t_learner(y, x, w, x_vals, y_grid, B_post, T_fwd, weighting, seed,
-                                     w_cond=w_cond)
+                                     w_cond=w_cond, standardise=standardise)
     return _mp_density_s_learner(y, x, w, x_vals, y_grid, B_post, T_fwd,
-                                 x_update, weighting, seed, w_cond=w_cond)
+                                 x_update, weighting, seed, w_cond=w_cond, standardise=standardise)
 
 
 ### Diagnostic functions ###
@@ -475,7 +499,8 @@ def _make_w_idx_and_mask(ind_new, w_map, Z_jnp, weighting):
 
 
 def _mp_density_s_learner_diagnostic(y, x, w, x_vals, y_grid, B_post, T_fwd,
-                                     x_update, weighting, seed):
+                                     x_update, weighting, seed, standardise=False):
+    y, y_grid, sd = _standardise(y, y_grid, standardise)
     Z = np.column_stack((x, w))
     n = Z.shape[0]
     y_jnp, Z_jnp = jnp.array(y), jnp.array(Z)
@@ -632,7 +657,7 @@ def _mp_density_s_learner_diagnostic(y, x, w, x_vals, y_grid, B_post, T_fwd,
 
     logpdf_pr = jnp.squeeze(logpdf_pr)
     logcdf_pr = jnp.squeeze(logcdf_pr)
-    pdfs = jnp.exp(logpdf_pr).reshape(B_post, n_x, n_w, n_y)
+    pdfs = jnp.exp(logpdf_pr).reshape(B_post, n_x, n_w, n_y) / sd   # back to the y scale
     cdfs = jnp.exp(logcdf_pr).reshape(B_post, n_x, n_w, n_y)
 
     final_weights = final_counts_all / final_counts_all.sum(axis=1, keepdims=True)
@@ -642,7 +667,8 @@ def _mp_density_s_learner_diagnostic(y, x, w, x_vals, y_grid, B_post, T_fwd,
     results = _summarize(marginal_pdfs)
     results['marginal_pdfs'] = np.array(marginal_pdfs)
     results['marginal_cdfs'] = np.array(marginal_cdfs)
-    l1_trajectory = jnp.concatenate([jnp.zeros((B_post, 1, n_x)), l1_trajectory], axis=1)
+    # the trajectory is a grid sum of density differences -> rescale like the densities
+    l1_trajectory = jnp.concatenate([jnp.zeros((B_post, 1, n_x)), l1_trajectory / sd], axis=1)
     results['l1_trajectory'] = np.array(l1_trajectory)
 
     if weighting == "att" and x_update == "bb":
@@ -654,7 +680,7 @@ def _mp_density_s_learner_diagnostic(y, x, w, x_vals, y_grid, B_post, T_fwd,
 
 
 def _mp_density_t_learner_diagnostic(y, x, w, x_vals, y_grid, B_post, T_fwd,
-                                     weighting, seed):
+                                     weighting, seed, standardise=False):
     y = np.asarray(y)
     n_y = len(y_grid)
 
@@ -692,7 +718,8 @@ def _mp_density_t_learner_diagnostic(y, x, w, x_vals, y_grid, B_post, T_fwd,
 
     for arm_i, x_val in enumerate(x_vals):
         mask_arm = x == x_val
-        y_arm = jnp.array(y[mask_arm])
+        y_arm, y_grid_arm, sd = _standardise(y[mask_arm], y_grid, standardise)   # within-arm
+        y_arm = jnp.array(y_arm)
         Z_sub_jnp = jnp.array(w[mask_arm])
         n_arm = int(mask_arm.sum())
 
@@ -702,7 +729,7 @@ def _mp_density_t_learner_diagnostic(y, x, w, x_vals, y_grid, B_post, T_fwd,
         rho_opt = fit.rho_opt
         rho_x_opt = fit.rho_x_opt
 
-        y_target = jnp.tile(jnp.array(y_grid), n_w)
+        y_target = jnp.tile(jnp.array(y_grid_arm), n_w)
         z_target = jnp.repeat(w_unique_jnp, n_y, axis=0)
         logcdf_init, logpdf_init = predict_copula_cregression(fit, y_target, z_target)
 
@@ -756,12 +783,12 @@ def _mp_density_t_learner_diagnostic(y, x, w, x_vals, y_grid, B_post, T_fwd,
         print(f'Diagnostic resampling for x={x_val}...')
         logcdf_pr, logpdf_pr, l1_arm, final_counts = vmap(_single_diag_arm)(subkeys_arm, shared_w_idx)
 
-        pdfs = jnp.exp(jnp.squeeze(logpdf_pr)).reshape(B_post, n_w, n_y)
+        pdfs = jnp.exp(jnp.squeeze(logpdf_pr)).reshape(B_post, n_w, n_y) / sd
         cdfs = jnp.exp(jnp.squeeze(logcdf_pr)).reshape(B_post, n_w, n_y)
         final_weights = final_counts / final_counts.sum(axis=1, keepdims=True)
         marginals.append(jnp.einsum('bw,bwy->by', final_weights, pdfs))
         marginal_cdfs_arms.append(jnp.einsum('bw,bwy->by', final_weights, cdfs))
-        l1_all_arms.append(l1_arm)
+        l1_all_arms.append(l1_arm / sd)
 
     marginal_pdfs = jnp.stack(marginals, axis=1)
     marginal_cdfs = jnp.stack(marginal_cdfs_arms, axis=1)
@@ -777,7 +804,7 @@ def _mp_density_t_learner_diagnostic(y, x, w, x_vals, y_grid, B_post, T_fwd,
 
 def mp_causal_density_diagnostic(y, x, w, y_grid, B_post, T_fwd, *,
                                  x_vals=(0, 1), x_update="bb", weighting="ate",
-                                 learner="s", seed=42):
+                                 learner="s", standardise=False, seed=42):
     if x_update not in ("bb", "logistic"):
         raise ValueError("x_update must be 'bb' or 'logistic'")
     if weighting not in ("ate", "att"):
@@ -815,9 +842,9 @@ def mp_causal_density_diagnostic(y, x, w, y_grid, B_post, T_fwd, *,
 
     if learner == "t":
         return _mp_density_t_learner_diagnostic(y, x, w, x_vals, y_grid, B_post, T_fwd,
-                                                weighting, seed)
+                                                weighting, seed, standardise=standardise)
     return _mp_density_s_learner_diagnostic(y, x, w, x_vals, y_grid, B_post, T_fwd,
-                                            x_update, weighting, seed)
+                                            x_update, weighting, seed, standardise=standardise)
 ### ###
 
 
