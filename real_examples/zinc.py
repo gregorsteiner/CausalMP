@@ -87,7 +87,7 @@ def main():
     M = 2000
     z = np.random.default_rng(1).standard_normal((B, M, 2))
     rho_prior = np.random.default_rng(2).uniform(0, 1, B)
-    rho_specs = [(r"$\rho=0.75$", 0.75), (r"$\rho \sim U(0, 1)$", rho_prior)]
+    rho_specs = [(r"$\rho=0.5$", 0.5), (r"$\rho=0.75$", 0.75), (r"$\rho \sim U(0, 1)$", rho_prior)]
     bins = np.arange(-15, 10.25, 0.5)
     bin_mid = 0.5 * (bins[:-1] + bins[1:])
 
@@ -124,7 +124,7 @@ def main():
 
     # bottom row: individual treatment effect distributions for each copula correlation,
     # and the posterior of the ATE (difference in counterfactual means)
-    rho_colors = ['tab:orange', 'tab:green']
+    rho_colors = ['tab:purple', 'tab:orange', 'tab:green']
     te_grid = np.linspace(-10, 5, 301)
     for ax, label in [(axes[1, 0], "S-learner"), (axes[1, 1], "T-learner")]:
         ax.plot(te_grid, gaussian_kde(ate[label])(te_grid), color='tab:blue', label="ATE")
@@ -141,7 +141,7 @@ def main():
 
     plt.tight_layout()
     fig.legend(*axes[1, 0].get_legend_handles_labels(), loc='upper center', bbox_to_anchor=(0.5, 0.03),
-               ncol=3, frameon=False, fontsize=9)
+               ncol=4, frameon=False, fontsize=9)
     plt.savefig('Figures/ZincExample.pdf', dpi=300, bbox_inches='tight')
     print("Saved Figures/ZincExample.pdf")
 
