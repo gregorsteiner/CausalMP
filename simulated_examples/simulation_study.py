@@ -19,8 +19,9 @@ and record, for each counterfactual marginal density p(y(x)),
        the true quantiles q_0.1, q_0.5, q_0.9 of Y(x), and the interval width there;
   (iii) the wall-clock runtime of each fit (time_s).
 
-Produces Figures/Simulation_Study.pdf, Figures/Simulation_Study_summary.csv,
-Figures/Simulation_Study_table.tex and the per-replicate Figures/Simulation_Study_raw.csv.
+Produces Figures/Simulation_Study_summary.csv, Figures/Simulation_Study_table.tex and the
+per-replicate Figures/Simulation_Study_raw.csv. The single-dataset figure is drawn separately
+by simulated_examples/illustration.py, on one of these replicates.
 Requires R with npcausal, ranger, BayesTree and SPQR, and rpy2. Slow: use --n-datasets (and
 --spqr-iter/--spqr-warmup) for a quick test run, e.g.
 `python -m simulated_examples.simulation_study --n-datasets 2 --spqr-iter 300 --spqr-warmup 200`,
@@ -56,10 +57,6 @@ limit_cpu(N_THREADS)
 
 import numpy as np
 import pandas as pd
-
-from simulated_examples.plot_style import set_style
-import matplotlib.pyplot as plt
-from matplotlib.lines import Line2D
 
 from causal_mp import mp_causal_density
 from simulated_examples.dgp import (generate_data_sim1, true_y0_density_sim1, true_y1_density_sim1,
@@ -99,7 +96,6 @@ COLORS = {"MP-SL (ours)": "#1f77b4", "MP-TL (ours)": "#2ca02c", CDENSITY_NAME: "
 RAW_CSV = "Figures/Simulation_Study_raw.csv"
 SUMMARY_CSV = "Figures/Simulation_Study_summary.csv"
 TABLE_TEX = "Figures/Simulation_Study_table.tex"
-FIGURE = "Figures/Simulation_Study.pdf"
 
 
 def truth(scenario):
@@ -271,41 +267,6 @@ def write_table(summary):
     print(f"Saved {TABLE_TEX}")
 
 
-def plot(summary):
-    set_style()
-    ns = sorted(summary["n"].unique())
-    scenarios = sorted(summary["scenario"].unique())
-    fig, axes = plt.subplots(2, len(scenarios) * 2, figsize=(3 * len(scenarios) * 2, 5),
-                             sharex=True, sharey="row", constrained_layout=True, squeeze=False)
-    methods = list(summary["method"].cat.categories)
-    offsets = dict(zip(methods, np.linspace(-0.15, 0.15, len(methods))))
-    xpos = np.arange(len(ns))
-
-    for j, (sc, (_, lab)) in enumerate([(sc, o) for sc in scenarios for o in OUTCOMES]):
-        for m in methods:
-            d = summary[(summary["scenario"] == sc) & (summary["outcome"] == lab)
-                        & (summary["method"] == m)].set_index("n").reindex(ns)
-            axes[0, j].errorbar(xpos + offsets[m], d["l1"], yerr=2 * d["l1_se"], fmt="o",
-                                ms=4, capsize=2, color=COLORS[m])
-            for tau, mk in zip(QUANTILES, ("v", "o", "^")):
-                axes[1, j].plot(xpos + offsets[m], d[f"cover_q{tau}"], mk, ms=4, color=COLORS[m],
-                                linestyle="none")
-        axes[0, j].set_title(f"Scenario {sc}, {lab}", fontsize=11)
-        axes[1, j].axhline(0.95, color="grey", linestyle=(0, (5, 3)), linewidth=1)
-        axes[1, j].set_ylim(0, 1.05)
-        axes[1, j].set_xticks(xpos, [f"n={n}" for n in ns])
-        axes[0, j].set_ylim(bottom=0)
-    axes[0, 0].set_ylabel(r"Mean $L_1$ error ($\pm$ 2 SE)")
-    axes[1, 0].set_ylabel("Coverage at quantiles")
-
-    handles = [Line2D([0], [0], color=COLORS[m], marker="o", linestyle="none", label=m) for m in methods]
-    handles += [Line2D([0], [0], color="grey", marker=mk, linestyle="none", label=rf"$q_{{{tau}}}$")
-                for tau, mk in zip(QUANTILES, ("v", "o", "^"))]
-    fig.legend(handles=handles, loc="outside lower center", ncol=len(handles), frameon=False, fontsize=10)
-    fig.savefig(FIGURE, dpi=300, bbox_inches="tight")
-    print(f"Saved {FIGURE}")
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--n-datasets", type=int, default=N_DATASETS,
@@ -319,14 +280,14 @@ def main():
                         help="SPQR-DS NUTS warmup iterations per PS draw")
     parser.add_argument("--skip-spqr", action="store_true", help="leave SPQR-DS out")
     parser.add_argument("--summarise-only", action="store_true",
-                        help=f"skip the fits and rebuild the summary and figure from {RAW_CSV}")
+                        help=f"skip the fits and rebuild the summary and table from {RAW_CSV}")
     args = parser.parse_args()
 
     spqr = None if args.skip_spqr else {**SPQR_SETTINGS, "iter": args.spqr_iter,
                                          "warmup": args.spqr_warmup}
     raw = pd.read_csv(RAW_CSV) if args.summarise_only else \
         run_experiment(args.n, args.scenario, args.n_datasets, args.t_fwd, spqr)
-    plot(summarise(raw))
+    summarise(raw)
 
 
 if __name__ == "__main__":
